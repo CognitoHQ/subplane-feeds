@@ -32,6 +32,20 @@ Subscribe messages (one or several, from the pack's templates) are written one a
 
 Printed on exit and every minute: frames, published, dropped, per-type counts, mapping/book/parse errors, unmatched streams, unknown symbols, acks, resyncs, last sequence, and `frame_to_offer_ns`: a log-linear histogram (a copy of the agent's, `src/latency_hist.h`, so both repos report on the same bucket edges; p50, p99, p999, max, mean) of the wall time from entering `on_frame` to the last offer of that frame, over frames that published something. It includes the publisher's cost, so measure the gateway itself with `--out null` (counts and discards). On the 2026-10-13 fixtures replayed on the dev host with `--out null`: Binance p50 0.7 µs, p99 10 to 15 µs (depth diffs with many levels), Kraken p50 0.7 to 1 µs, Coinbase p50 1.7 µs, OKX p50 0.9 to 1.4 µs; `--out stdout` roughly doubles the p50 with iostream formatting.
 
+## End to end, measured live
+
+2026-10-13, Binance spot, BTCUSDT/ETHUSDT/SOLUSDT, 30 s, 7921 messages: `spwsgw` (core 3) -> Aeron IPC, embedded driver in the agent, shared mode -> `subplaned` (core 2) -> ring -> `views_app --spin --latency` (core 4), Ryzen 5 3600, Ubuntu 22.04 container, no core isolation, one CLOCK_REALTIME on all three.
+
+| Hop | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| gateway frame receive to Aeron offer (`frame_to_offer_ns`, live) | 4.1 µs | | 49 µs | 530 µs |
+| gateway receive to agent receive (`gw_to_agent`) | 20 µs | 57 µs | 131 µs | 710 µs |
+| agent receive to ring write (agent `recv_to_publish`) | 1.5 µs | 8 µs | 25 µs | 48 µs |
+| agent receive to app read (`agent_to_app`) | 6.1 µs | 20 µs | 41 µs | 2.8 ms |
+| gateway receive to app read (`gw_to_app`) | 28.7 µs | 65 µs | 164 µs | 2.8 ms |
+
+The Aeron IPC hop (gateway offer to agent poll) is about 16 µs p50 by subtraction, larger than an IPC log hand-off should be; candidates are the publisher's offer path, the agent's `sched_yield` idle on a shared core, and the container's lack of isolation. Not yet explained. The TLS and WebSocket read in front of `RecvTs` is not in these numbers. One Binance depth resync occurred in the 30 s (0 in the earlier 6 s run).
+
 ## On the path
 
 One I/O thread, no queue, no lock. Per frame: one indirect call from the WebSocket client (a function pointer with a context, not `std::function`), one simdjson On Demand parse, string views into the frame for frame-scope values, no allocation after warm-up (error strings are built only when a record fails). Per book record one virtual call into the strategy; per offer one virtual call into the publisher.
