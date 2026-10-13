@@ -4,25 +4,32 @@
 #include "l2_inband.h"
 #include "snapshot_only.h"
 
-#include <algorithm>
 
 namespace feeds {
 
 Book::Result Book::apply(Side side, int64_t px, int64_t qty) noexcept {
-    std::vector<Level>& v = side == Side::Buy ? bids_ : asks_;
-    // bids descend, asks ascend: find the first level not better than px.
-    auto it = side == Side::Buy
-        ? std::lower_bound(v.begin(), v.end(), px, [](const Level& l, int64_t p) { return l.px > p; })
-        : std::lower_bound(v.begin(), v.end(), px, [](const Level& l, int64_t p) { return l.px < p; });
-    const uint32_t idx = static_cast<uint32_t>(it - v.begin());
-    if (it != v.end() && it->px == px) {
-        if (qty == 0) { v.erase(it); return {Action::Delete, idx, true}; }
-        it->qty = qty;
+    SideMap& m = side == Side::Buy ? bids_ : asks_;
+    const int64_t k = key(side, px);
+    auto it = m.lower_bound(k);
+    const bool present = it != m.end() && it->first == k;
+    if (!present && qty == 0) return {Action::Delete, 255, false};
+    // Level index: the rank of `it` among the best, capped at ten so the walk stays short.
+    uint32_t idx = 0;
+    for (auto j = m.begin(); j != it && idx < 10; ++j) ++idx;
+    if (idx >= 10) idx = 255;
+    if (present) {
+        if (qty == 0) { m.erase(it); return {Action::Delete, idx, true}; }
+        it->second = qty;
         return {Action::Update, idx, true};
     }
-    if (qty == 0) return {Action::Delete, idx, false};
-    v.insert(it, Level{px, qty});
+    m.emplace_hint(it, k, qty);
     return {Action::Add, idx, true};
+}
+
+void Book::top(Side side, size_t max, std::vector<Level>& out) const {
+    const SideMap& m = side == Side::Buy ? bids_ : asks_;
+    out.clear();
+    for (auto it = m.begin(); it != m.end() && out.size() < max; ++it) out.push_back(Level{side == Side::Buy ? -it->first : it->first, it->second});
 }
 
 namespace {

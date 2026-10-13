@@ -61,6 +61,8 @@ public:
     const GatewayStats& stats() const noexcept { return stats_; }
     // Wall time from entering on_frame to the last offer of that frame (frames that published something).
     const LatencyHistogram& frame_latency() const noexcept { return lat_; }
+    // RecvTs (CLOCK_REALTIME at frame receive) to the end of the offer, the same clock the agent's ingest_ts uses.
+    const LatencyHistogram& recv_to_offer_rt() const noexcept { return lat_rt_; }
     uint64_t sequence() const noexcept { return seq_; }
     uint64_t resyncs() const noexcept;
 
@@ -88,13 +90,14 @@ private:
     std::string buf_;                  // frame copy with simdjson padding
     std::vector<BookSlot> books_;      // (book stream, instrument) pairs
     std::vector<BookEmit> emits_;
+    std::vector<Level> top_;           // scratch for snapshots, reserved once
     std::vector<uint8_t> batch_;       // messages of the current frame, back to back, each self-framed by its SBE header
     uint64_t pending_ = 0;             // messages in batch_
     std::deque<SnapshotRequest> requests_;
     FrameTokens frame_;                // "$." field tokens of the current frame
     std::string_view kind_;            // the `kind` role value of the current frame, when frame-scope
     GatewayStats stats_;
-    LatencyHistogram lat_;
+    LatencyHistogram lat_, lat_rt_;
     uint64_t seq_ = 0, last_heartbeat_ = 0, last_definitions_ = 0;
     uint32_t errors_logged_ = 0;
 };

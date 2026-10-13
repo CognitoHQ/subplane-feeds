@@ -46,6 +46,7 @@ Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pu
     }
     buf_.reserve(65536 + simdjson::SIMDJSON_PADDING);
     emits_.reserve(1024);
+    top_.reserve(10);
     batch_.reserve(opts_.batch_bytes ? opts_.batch_bytes : 512);
 }
 
@@ -223,9 +224,12 @@ void Gateway::publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept {
             const Book& bk = slot.strategy->book();
             const uint16_t bpx = find_field(*m, "BidPx")->offset, bq = find_field(*m, "BidQty")->offset;
             const uint16_t apx = find_field(*m, "AskPx")->offset, aq = find_field(*m, "AskQty")->offset;
-            const size_t nb = std::min<size_t>(10, bk.bids().size()), na = std::min<size_t>(10, bk.asks().size());
-            for (size_t i = 0; i < nb; ++i) { put_i64(buf, static_cast<uint16_t>(bpx + 8 * i), bk.bids()[i].px); put_i64(buf, static_cast<uint16_t>(bq + 8 * i), bk.bids()[i].qty); }
-            for (size_t i = 0; i < na; ++i) { put_i64(buf, static_cast<uint16_t>(apx + 8 * i), bk.asks()[i].px); put_i64(buf, static_cast<uint16_t>(aq + 8 * i), bk.asks()[i].qty); }
+            bk.top(Side::Buy, 10, top_);
+            const size_t nb = top_.size();
+            for (size_t i = 0; i < nb; ++i) { put_i64(buf, static_cast<uint16_t>(bpx + 8 * i), top_[i].px); put_i64(buf, static_cast<uint16_t>(bq + 8 * i), top_[i].qty); }
+            bk.top(Side::Sell, 10, top_);
+            const size_t na = top_.size();
+            for (size_t i = 0; i < na; ++i) { put_i64(buf, static_cast<uint16_t>(apx + 8 * i), top_[i].px); put_i64(buf, static_cast<uint16_t>(aq + 8 * i), top_[i].qty); }
             put(buf, find_field(*m, "Depth")->offset, static_cast<uint8_t>(std::max(nb, na)));
             publish(buf, sizeof buf, stats_.book_snapshots);
         }
@@ -301,7 +305,11 @@ void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
     if (rec_) rec_->frame(recv_ts, json);
     process_frame(json, recv_ts);
     flush();
-    if (stats_.published != before) { const uint64_t d = mono_ns() - t0; lat_.record(d); lat_.note_max(d); }
+    if (stats_.published != before) {
+        const uint64_t d = mono_ns() - t0; lat_.record(d); lat_.note_max(d);
+        // The same clock and start point the agent compares against (RecvTs), so the two histograms subtract.
+        const uint64_t rt = real_ns(); if (rt > recv_ts) lat_rt_.record(rt - recv_ts);
+    }
 }
 
 void Gateway::process_frame(std::string_view json, uint64_t recv_ts) {

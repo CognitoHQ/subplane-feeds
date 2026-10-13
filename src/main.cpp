@@ -80,6 +80,9 @@ void print_stats(const Gateway& gw, FILE* f) {
     const LatencyHistogram& h = gw.frame_latency();
     std::fprintf(f, "frame_to_offer_ns: n=%llu p50=%llu p99=%llu p999=%llu max=%llu mean=%llu\n", (unsigned long long)h.count(), (unsigned long long)h.quantile(0.5),
                  (unsigned long long)h.quantile(0.99), (unsigned long long)h.quantile(0.999), (unsigned long long)h.max(), (unsigned long long)h.mean());
+    const LatencyHistogram& r = gw.recv_to_offer_rt();
+    std::fprintf(f, "recv_to_offer_rt_ns: n=%llu p50=%llu p99=%llu p999=%llu max=%llu\n", (unsigned long long)r.count(), (unsigned long long)r.quantile(0.5),
+                 (unsigned long long)r.quantile(0.99), (unsigned long long)r.quantile(0.999), (unsigned long long)r.max());
 }
 
 } // namespace

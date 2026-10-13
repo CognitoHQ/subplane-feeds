@@ -9,7 +9,9 @@
 
 #include <simdjson.h>
 
+#include <climits>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,15 +26,26 @@ enum class Action : uint8_t { Add = 1, Update = 2, Delete = 3, Clear = 4 };
 class Book {
 public:
     // Applies an absolute quantity at a price (0 deletes). Returns the action and
-    // the 0-based level index at which it happened (the former index for deletes).
-    // `changed` is false when nothing happened (delete of an absent level).
+    // the 0-based level index at which it happened (the former index for deletes),
+    // 255 when deeper than the top ten. `changed` is false when nothing happened
+    // (delete of an absent level).
     struct Result { Action action; uint32_t level; bool changed; };
     Result apply(Side side, int64_t px, int64_t qty) noexcept;
     void clear() noexcept { bids_.clear(); asks_.clear(); }
-    const std::vector<Level>& bids() const noexcept { return bids_; }   // descending price
-    const std::vector<Level>& asks() const noexcept { return asks_; }   // ascending price
+    // The best `max` levels of a side, best first.
+    void top(Side side, size_t max, std::vector<Level>& out) const;
+    size_t depth(Side side) const noexcept { return (side == Side::Buy ? bids_ : asks_).size(); }
+    std::vector<Level> bids() const { std::vector<Level> v; top(Side::Buy, SIZE_MAX, v); return v; }   // descending price
+    std::vector<Level> asks() const { std::vector<Level> v; top(Side::Sell, SIZE_MAX, v); return v; }  // ascending price
 private:
-    std::vector<Level> bids_, asks_;
+    // INTENT: an exchange book holds a thousand levels a side and a depth frame
+    // touches a dozen; a sorted vector costs a 16 KB memmove per touch, which was
+    // the whole gateway-to-agent latency for book updates (measured 2026-10-13).
+    // A map keyed by signed price (bids negated so both sides iterate best first)
+    // makes a touch O(log n), and the level index is only walked up to ten.
+    using SideMap = std::map<int64_t, int64_t>;
+    static int64_t key(Side side, int64_t px) noexcept { return side == Side::Buy ? -px : px; }
+    SideMap bids_, asks_;
 };
 
 struct BookEmit {

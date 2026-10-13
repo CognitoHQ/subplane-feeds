@@ -22,6 +22,10 @@ private:
     LogHistogram h_;
 };
 
+inline uint64_t real_ns() noexcept {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
 inline uint64_t mono_ns() noexcept {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 }
