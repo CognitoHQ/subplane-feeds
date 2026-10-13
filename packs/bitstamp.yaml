@@ -1,0 +1,25 @@
+# Bitstamp v2. Frames: {"event": "trade"|"data", "channel": "live_trades_btcusd", "data": {...}}.
+# The symbol is a suffix of the channel name, in lowercase.
+exchange: bitstamp
+venue_id: 50
+connect:
+  url: wss://ws.bitstamp.net
+  wrapper: { stream: channel, data: data }
+  subscribe:                                                      # one message per channel per symbol
+    - { event: "bts:subscribe", data: { channel: "{stream}" } }
+  symbol_case: lower                                              # btcusd
+streams:
+  - name: "live_trades_{symbol}"                                  # symbol at the end, not the start
+    message: Trade
+    fields:
+      ExchangeTs: { path: microtimestamp, unit: us }              # a string of digits
+      Price:      { path: price_str, type: decimal }
+      Qty:        { path: amount_str, type: decimal }
+      TradeId:    { path: id }
+      Aggressor:  { path: type, map: { "0": Buy, "1": Sell } }
+  - name: "order_book_{symbol}"                                   # full top-100 snapshot every event
+    book: snapshot_only
+    fields:
+      bids: bids
+      asks: asks
+      ExchangeTs: { path: microtimestamp, unit: us }

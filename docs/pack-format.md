@@ -49,3 +49,17 @@ Anything the vocabulary cannot express (multi-message frames, conditional fields
 Roles: `first_id` (U), `last_id` (u), `bids`, `asks` (arrays of `[price, qty]` with absolute quantities, 0 deletes), optional `ExchangeTs`. Snapshot roles: `last_id`, `bids`, `asks`; the snapshot URL may use `{SYMBOL}` (venue case) or `{symbol}` (stream case).
 
 Sync rule: events are buffered until a snapshot arrives; events with `u <= lastUpdateId` are dropped; the first applied event must satisfy `U <= lastUpdateId + 1 <= u`; afterwards every event must have `U == previous u + 1`, otherwise the book is dropped and a new snapshot requested (a resync, counted). After a sync the gateway publishes one `BookSnapshot` (`Flags` bit 0 set when it followed a resync), then one `BookUpdate` per changed level, and another `BookSnapshot` every `--snapshot-every` updates.
+
+## Known gaps (from the draft packs under `packs/draft/`)
+
+Written 2026-10-13 against Coinbase, Kraken v2, OKX v5 and Bitstamp v2 frames to see where the vocabulary stops. In order of how many exchanges need them:
+
+1. **Routing by fields, not stream name** (`connect.route: { type: <path>, symbol: <path> }` plus `match:` per stream): Coinbase (`type` + `product_id`), Kraken (`channel` + `data.0.symbol`), OKX (`arg.channel` + `arg.instId`). Only Binance and Bitstamp name the stream in a wrapper.
+2. **Several records per frame** (`each: <path>`): Kraken and OKX put an array of records under `data`; one frame must yield one canonical message per element, with frame-level fields (OKX `action`, Kraken `type`) still reachable.
+3. **ISO-8601 timestamps** (`type: iso8601`): Coinbase and Kraken. Exact parse to nanoseconds, no floating point.
+4. **One subscribe message per channel** and non-string stream entries: Kraken and Bitstamp send one subscribe per channel; OKX subscribes with objects `{channel, instId}`; Coinbase wants `product_ids` plus a channel list. `subscribe` must become a list of templates with `{symbols}` / `{stream}` placeholders, not one message with `{streams}`.
+5. **Symbol anywhere in the stream name** (`live_trades_{symbol}`): Bitstamp; routing by prefix and suffix instead of suffix only.
+6. **Application-level ping** (`ping: { text: ping, every_s: 20 }`): OKX closes idle connections unless a text "ping" is sent; Binance uses WebSocket ping frames.
+7. **Book strategies**: `l2_inband` (Coinbase: snapshot on the socket, then `[side, price, size]` changes), `l2_inband_checksum` (Kraken: levels as `{price, qty}` objects, CRC32 of the top ten), `okx_seq` (seqId/prevSeqId chain, levels with extra columns), `snapshot_only` (Bitstamp: full top-100 every event). Each is code; the pack only names it and binds its roles.
+
+Not needed by any of the four: a richer expression language. Every value is still a path plus a conversion.

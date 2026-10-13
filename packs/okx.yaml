@@ -1,0 +1,43 @@
+# OKX, public v5. Frames: {"arg": {"channel": ..., "instId": ...}, "action": ..., "data": [ {...} ]}.
+exchange: okx
+venue_id: 40
+connect:
+  url: wss://ws.okx.com:8443/ws/v5/public
+  route: { type: arg.channel, symbol: arg.instId }
+  subscribe: { op: subscribe, args: "{streams}" }                 # streams are objects here: {channel, instId}
+  stream_object: { channel: "{channel}", instId: "{SYMBOL}" }
+  ping: { text: ping, every_s: 20 }                               # text "ping"/"pong", not WebSocket ping frames
+  symbol_case: upper                                              # BTC-USDT
+streams:
+  - name: "{symbol}@trades"
+    match: trades
+    each: data
+    message: Trade
+    fields:
+      ExchangeTs: { path: ts, unit: ms }                          # a string "1629386781174"
+      Price:      { path: px, type: decimal }
+      Qty:        { path: sz, type: decimal }
+      TradeId:    { path: tradeId }
+      Aggressor:  { path: side, map: { buy: Buy, sell: Sell } }
+  - name: "{symbol}@tickers"
+    match: tickers
+    each: data
+    message: Quote
+    fields:
+      ExchangeTs: { path: ts, unit: ms }
+      BidPx:  { path: bidPx, type: decimal }
+      BidQty: { path: bidSz, type: decimal }
+      AskPx:  { path: askPx, type: decimal }
+      AskQty: { path: askSz, type: decimal }
+  - name: "{symbol}@books"
+    match: books
+    each: data
+    book: okx_seq                                                 # action snapshot|update at frame level, seqId/prevSeqId chain, checksum
+    fields:
+      action: { path: action, scope: frame }                     # outside the each: element
+      bids: bids                                                  # ["px", "sz", "0", "numOrders"]: pairs with extra columns
+      asks: asks
+      seq_id: seqId
+      prev_seq_id: prevSeqId
+      checksum: checksum
+      ExchangeTs: { path: ts, unit: ms }

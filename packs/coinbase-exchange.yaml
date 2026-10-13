@@ -1,0 +1,36 @@
+# Coinbase Exchange, public market data feed. No wrapper: every frame is a flat object
+# whose "type" names the channel and whose "product_id" names the instrument.
+exchange: coinbase
+venue_id: 20
+connect:
+  url: wss://ws-feed.exchange.coinbase.com
+  route: { type: type, symbol: product_id }                       # frame routing by fields, not by stream name
+  subscribe: { type: subscribe, product_ids: "{symbols}", channels: [matches, ticker, level2_batch, heartbeat] }
+  symbol_case: upper                                              # BTC-USD
+streams:
+  - name: "{symbol}@match"
+    match: match                                                  # value of the route field
+    message: Trade
+    fields:
+      ExchangeTs: { path: time, type: iso8601 }                   # "2014-11-07T08:19:27.028459Z"
+      Price:      { path: price, type: decimal }
+      Qty:        { path: size, type: decimal }
+      TradeId:    { path: trade_id }
+      Aggressor:  { path: side, map: { sell: Buy, buy: Sell } }   # side is the maker's side; the taker aggressed
+  - name: "{symbol}@ticker"
+    match: ticker
+    message: Quote
+    fields:
+      ExchangeTs: { path: time, type: iso8601 }
+      BidPx:  { path: best_bid, type: decimal }
+      BidQty: { path: best_bid_size, type: decimal }
+      AskPx:  { path: best_ask, type: decimal }
+      AskQty: { path: best_ask_size, type: decimal }
+  - name: "{symbol}@level2"
+    match: [snapshot, l2update]                                   # one stream, two frame types
+    book: l2_inband                                               # snapshot arrives on the socket, then absolute-size changes
+    fields:
+      snapshot_bids: bids
+      snapshot_asks: asks
+      changes: changes                                            # [side, price, size]
+      ExchangeTs: { path: time, type: iso8601 }
