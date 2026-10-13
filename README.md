@@ -40,7 +40,7 @@ build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdo
 build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
 ```
 
-`--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
+`--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--batch-bytes N` (default 1376, one Aeron MTU after its header) lets the messages one frame produced share an offer; the batch is flushed when the frame ends, never on a timer. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
 
 ## What a pack is
 
@@ -68,7 +68,7 @@ The models are the canonical schema (`spwsgw models` lists them); conversions de
 
 ## Contract with the agent
 
-Only two things: `contract/subplane_canonical.xml` (schema id 100) with its generated header, both copied from the agent repo, and the rule "one canonical message per Aeron offer, `Sequence` in the message". No shared library in either direction.
+Only two things: `contract/subplane_canonical.xml` (schema id 100) with its generated header, both copied from the agent repo, and the framing rule: an Aeron offer carries one or more whole canonical messages back to back, each self-framed by its SBE header, `Sequence` in every message. The agent's partition uses `framing: { length: schema, sequence: message.Sequence }` and walks them apart; no envelope. No shared library in either direction.
 
 ## Status
 

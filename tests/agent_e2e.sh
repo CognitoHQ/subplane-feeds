@@ -15,7 +15,7 @@ agent: { name: feedse2e, version: test, max_symbols: 65536, thread_groups: [ { n
 partitions:
   - name: crypto
     transport: { type: aeron, channel: "aeron:ipc", stream_id: 1001, aeron_dir: "$ADIR", driver: { embedded: true, threading_mode: shared } }
-    framing: { length: packet, sequence: message.Sequence }
+    framing: { length: schema, sequence: message.Sequence }   # several canonical messages per offer, back to back
     decoder:
       type: sbe_routing
       schema: $SCHEMA
@@ -46,6 +46,8 @@ SUMMARY=$(tail -1 "$TMP/app.log"); echo "$SUMMARY"
 echo "$SUMMARY" | grep -q " bad=0$" || fail "views_app rejected records"
 TRADES=$(grep -c "^Trade " "$DIR/expected.txt"); echo "$SUMMARY" | grep -q "trades=$TRADES " || fail "trade count differs from the fixture ($TRADES)"
 STATUS=$(http_get "$API" /partitions); echo "$STATUS" | grep -q '"gaps":0' || fail "agent reports gaps: $STATUS"
-echo "$STATUS" | grep -q "\"packets\":$PUBLISHED," || fail "agent packets != published: $STATUS"
+OFFERS=$(grep -o "offers=[0-9]*" "$TMP/gw.log" | cut -d= -f2)
+echo "$STATUS" | grep -q "\"packets\":$OFFERS," || fail "agent packets != gateway offers ($OFFERS): $STATUS"
+echo "$STATUS" | grep -q "\"messages\":$PUBLISHED," || fail "agent messages != gateway published ($PUBLISHED): $STATUS"
 kill $AGENT_PID; wait $AGENT_PID 2>/dev/null
 echo "PASS"

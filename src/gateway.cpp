@@ -46,6 +46,7 @@ Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pu
     }
     buf_.reserve(65536 + simdjson::SIMDJSON_PADDING);
     emits_.reserve(1024);
+    batch_.reserve(opts_.batch_bytes ? opts_.batch_bytes : 512);
 }
 
 std::string Gateway::expand(std::string_view tpl, std::string_view stream_symbol, std::string_view venue_symbol, const StreamDef* sd) const {
@@ -108,11 +109,31 @@ void Gateway::log_error(const char* what, const std::string& err) noexcept {
     std::fprintf(stderr, "spwsgw: %s: %s%s\n", what, err.c_str(), errors_logged_ == 20 ? " (further errors not logged)" : "");
 }
 
+// INTENT: batching never waits. A batch is what one input frame (or one timer tick)
+// produced; it is offered when that unit ends, or earlier when the next message
+// would not fit. So the last message of a frame leaves at the same moment it would
+// have without batching, and the Aeron frame header is paid once per batch.
 void Gateway::publish(uint8_t* msg, size_t len, uint64_t& counter) noexcept {
     const uint64_t seq = ++seq_;
     std::memcpy(msg + kPrefixSequence, &seq, 8);
-    if (pub_.publish(msg, len)) { ++stats_.published; ++counter; }
-    else ++stats_.dropped;
+    ++counter;
+    if (opts_.batch_bytes == 0) {
+        ++stats_.offers; stats_.offer_bytes += len;
+        if (pub_.publish(msg, len)) ++stats_.published; else ++stats_.dropped;
+        return;
+    }
+    if (!batch_.empty() && batch_.size() + len > opts_.batch_bytes) flush();
+    batch_.insert(batch_.end(), msg, msg + len);
+    ++pending_;
+}
+
+void Gateway::flush() noexcept {
+    if (batch_.empty()) return;
+    ++stats_.offers; stats_.offer_bytes += batch_.size();
+    if (pub_.publish(batch_.data(), batch_.size())) stats_.published += pending_;
+    else stats_.dropped += pending_;
+    batch_.clear();
+    pending_ = 0;
 }
 
 void Gateway::publish_heartbeat(uint64_t now) noexcept {
@@ -147,6 +168,7 @@ void Gateway::publish_definitions(uint64_t now) noexcept {
 void Gateway::on_connected(uint64_t now) {
     if (rec_) rec_->event(now, "connected");
     publish_definitions(now);
+    flush();
 }
 
 void Gateway::on_disconnected(uint64_t now) {
@@ -163,6 +185,7 @@ void Gateway::tick(uint64_t now) {
             ++stats_.snapshot_requests;
         }
     }
+    flush();
 }
 
 bool Gateway::next_snapshot_request(SnapshotRequest& out) {
@@ -277,6 +300,7 @@ void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
     ++stats_.frames;
     if (rec_) rec_->frame(recv_ts, json);
     process_frame(json, recv_ts);
+    flush();
     if (stats_.published != before) { const uint64_t d = mono_ns() - t0; lat_.record(d); lat_.note_max(d); }
 }
 
@@ -357,6 +381,7 @@ void Gateway::on_snapshot(std::string_view venue_symbol, std::string_view body, 
         if (ok) ++stats_.snapshots_applied;
         publish_emits(b, recv_ts);
     }
+    flush();
 }
 
 } // namespace feeds

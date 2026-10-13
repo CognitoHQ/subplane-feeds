@@ -3,7 +3,7 @@
 //   spwsgw --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
 //                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001]
 //                    [--aeron-dir D] [--embedded-driver] [--record frames.jsonl] [--replay frames.jsonl]
-//                    [--snapshot-every 100] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
+//                    [--snapshot-every 100] [--batch-bytes 1376] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
 //   spwsgw models        # the canonical messages and fields a pack can target
 
 #include "gateway.h"
@@ -36,7 +36,7 @@ void on_signal(int) { g_stop = 1; }
 
 void usage() {
     std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
-               "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N]\n"
+               "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--quiet]\n"
                "       spwsgw models\n", stderr);
 }
@@ -70,9 +70,9 @@ void print_models() {
 
 void print_stats(const Gateway& gw, FILE* f) {
     const GatewayStats& s = gw.stats();
-    std::fprintf(f, "frames=%llu published=%llu dropped=%llu trades=%llu quotes=%llu book_updates=%llu snapshots=%llu heartbeats=%llu definitions=%llu "
+    std::fprintf(f, "frames=%llu published=%llu offers=%llu offer_bytes=%llu dropped=%llu trades=%llu quotes=%llu book_updates=%llu snapshots=%llu heartbeats=%llu definitions=%llu "
                     "map_errors=%llu book_errors=%llu parse_errors=%llu unmatched=%llu unknown_symbols=%llu acks=%llu resyncs=%llu seq=%llu\n",
-                 (unsigned long long)s.frames, (unsigned long long)s.published, (unsigned long long)s.dropped, (unsigned long long)s.trades,
+                 (unsigned long long)s.frames, (unsigned long long)s.published, (unsigned long long)s.offers, (unsigned long long)s.offer_bytes, (unsigned long long)s.dropped, (unsigned long long)s.trades,
                  (unsigned long long)s.quotes, (unsigned long long)s.book_updates, (unsigned long long)s.book_snapshots, (unsigned long long)s.heartbeats,
                  (unsigned long long)s.definitions, (unsigned long long)s.map_errors, (unsigned long long)s.book_errors, (unsigned long long)s.parse_errors,
                  (unsigned long long)s.unmatched_streams, (unsigned long long)s.unknown_symbols, (unsigned long long)s.acks,
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> a;
     std::set<std::string> flags;
     const std::set<std::string> valued = {"pack", "registry", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
-                                          "snapshot-every", "heartbeat-ms", "definitions-ms", "seconds"};
+                                          "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds"};
     const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe"};
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
@@ -122,6 +122,7 @@ int main(int argc, char** argv) {
     opts.heartbeat_ms = getu("heartbeat-ms", 1000);
     opts.definitions_ms = getu("definitions-ms", 60000);
     opts.snapshot_every = static_cast<uint32_t>(getu("snapshot-every", 100));
+    opts.batch_bytes = static_cast<uint32_t>(getu("batch-bytes", 1376));   // one Aeron MTU (1408) minus its 32-byte frame header
     opts.log_errors = !quiet;
 
     std::unique_ptr<Publisher> owned;

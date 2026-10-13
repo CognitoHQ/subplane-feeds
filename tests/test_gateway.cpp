@@ -157,3 +157,26 @@ TEST_CASE("Bitstamp: symbol at the end of the channel, event as the wrapper type
     CHECK(l[1] == "BookSnapshot iid=1 venue=50 seq=2 ets=1700000001000000000 flags=0 depth=2 b0=29999000000000x1000000000 b1=0x0 a0=30001000000000x2000000000 a1=30002000000000x3000000000");
     CHECK(gw.stats().acks == 1);
 }
+
+TEST_CASE("batching: the messages of one frame share one offer, flushed at the end of the frame") {
+    Fixture f("kraken", {"BTC/USD", "ETH/USD"});
+    NullPublisher null;
+    GatewayOptions o = quiet(); o.batch_bytes = 1376;
+    Gateway gw(f.pack, f.ins, null, o);
+    gw.on_frame(R"({"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":1,"qty":1,"trade_id":1,"timestamp":"2024-01-02T03:04:05Z"},{"symbol":"ETH/USD","side":"sell","price":2,"qty":2,"trade_id":2,"timestamp":"2024-01-02T03:04:05Z"},{"symbol":"BTC/USD","side":"buy","price":3,"qty":3,"trade_id":3,"timestamp":"2024-01-02T03:04:05Z"}]})", 1);
+    CHECK(gw.stats().published == 3); CHECK(gw.stats().offers == 1); CHECK(null.bytes() == 3 * sp_canonical::Trade::kSize);
+    gw.on_frame(R"({"channel":"ticker","type":"snapshot","data":[{"symbol":"ETH/USD","bid":1,"bid_qty":1,"ask":2,"ask_qty":2}]})", 2);
+    CHECK(gw.stats().offers == 2);   // a new frame is a new offer: nothing waited
+    // A frame bigger than the batch limit is offered in pieces, in order, still within the frame.
+    GatewayOptions small = quiet(); small.batch_bytes = 2 * sp_canonical::Trade::kSize;
+    NullPublisher null2;
+    Gateway gw2(f.pack, f.ins, null2, small);
+    gw2.on_frame(R"({"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":1,"qty":1,"trade_id":1,"timestamp":"2024-01-02T03:04:05Z"},{"symbol":"ETH/USD","side":"sell","price":2,"qty":2,"trade_id":2,"timestamp":"2024-01-02T03:04:05Z"},{"symbol":"BTC/USD","side":"buy","price":3,"qty":3,"trade_id":3,"timestamp":"2024-01-02T03:04:05Z"}]})", 1);
+    CHECK(gw2.stats().published == 3); CHECK(gw2.stats().offers == 2);
+    // The stdout publisher walks a batch message by message, so the fixture format is unchanged.
+    std::ostringstream out; StdoutPublisher sp(out);
+    Gateway gw3(f.pack, f.ins, sp, o);
+    gw3.on_frame(R"({"channel":"trade","type":"update","data":[{"symbol":"BTC/USD","side":"buy","price":1,"qty":1,"trade_id":1,"timestamp":"2024-01-02T03:04:05Z"},{"symbol":"ETH/USD","side":"sell","price":2,"qty":2,"trade_id":2,"timestamp":"2024-01-02T03:04:05Z"}]})", 1);
+    std::string l; int n = 0; std::istringstream in(out.str()); while (std::getline(in, l)) { ++n; CHECK(l.rfind("Trade iid=", 0) == 0); }
+    CHECK(n == 2);
+}

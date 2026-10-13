@@ -13,30 +13,34 @@ namespace feeds {
 class Publisher {
 public:
     virtual ~Publisher() = default;
-    // One whole canonical message. False = dropped (counted by the gateway).
+    // One or more whole canonical messages back to back, each self-framed by its SBE header
+    // (8 bytes + blockLength). One offer on Aeron. False = dropped (counted by the gateway).
     virtual bool publish(const uint8_t* msg, size_t len) noexcept = 0;
     virtual std::string describe() const = 0;
     virtual void close() noexcept {}
 };
 
 // One line per message: "<Message> iid=<n> seq=<n> ets=<ns> <fields...>", integers only (exact, diffable).
+// Walks a batch by each message's SBE header (all canonical messages are flat: 8 + blockLength).
 class StdoutPublisher final : public Publisher {
 public:
     explicit StdoutPublisher(std::ostream& out) : out_(out) {}
     bool publish(const uint8_t* msg, size_t len) noexcept override;
     std::string describe() const override { return "stdout"; }
 private:
+    bool publish_one(const uint8_t* msg, size_t len) noexcept;
     std::ostream& out_;
 };
 
 // Counts and discards: for measuring the gateway without a publisher's cost.
 class NullPublisher final : public Publisher {
 public:
-    bool publish(const uint8_t*, size_t) noexcept override { ++n_; return true; }
+    bool publish(const uint8_t*, size_t len) noexcept override { ++n_; bytes_ += len; return true; }
     std::string describe() const override { return "null"; }
-    uint64_t published() const noexcept { return n_; }
+    uint64_t offers() const noexcept { return n_; }
+    uint64_t bytes() const noexcept { return bytes_; }
 private:
-    uint64_t n_ = 0;
+    uint64_t n_ = 0, bytes_ = 0;
 };
 
 #if FEEDS_WITH_AERON

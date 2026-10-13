@@ -28,12 +28,13 @@ struct GatewayOptions {
     uint64_t heartbeat_ms = 1000;
     uint64_t definitions_ms = 60000;
     uint32_t snapshot_every = 100;   // BookSnapshot every N book updates per instrument (0 = only on sync)
+    uint32_t batch_bytes = 1376;     // messages of one input frame share one offer up to this many bytes (0 = one message per offer)
     bool     log_errors = true;      // first few mapping errors to stderr
 };
 
 struct GatewayStats {
     uint64_t frames = 0, acks = 0, unmatched_streams = 0, unknown_symbols = 0, parse_errors = 0, map_errors = 0, book_errors = 0;
-    uint64_t records = 0, published = 0, dropped = 0;
+    uint64_t records = 0, published = 0, dropped = 0, offers = 0, offer_bytes = 0;
     uint64_t trades = 0, quotes = 0, book_updates = 0, book_snapshots = 0, heartbeats = 0, definitions = 0, other = 0;
     uint64_t snapshot_requests = 0, snapshots_applied = 0;
 };
@@ -66,7 +67,8 @@ public:
 private:
     struct BookSlot { std::unique_ptr<BookStrategy> strategy; const StreamDef* sd; const Instrument* ins; };
 
-    void publish(uint8_t* msg, size_t len, uint64_t& counter) noexcept;
+    void publish(uint8_t* msg, size_t len, uint64_t& counter) noexcept;   // appends to the current batch
+    void flush() noexcept;                                                   // one offer for everything appended since the last flush
     void publish_heartbeat(uint64_t now) noexcept;
     void publish_definitions(uint64_t now) noexcept;
     void publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept;
@@ -86,6 +88,8 @@ private:
     std::string buf_;                  // frame copy with simdjson padding
     std::vector<BookSlot> books_;      // (book stream, instrument) pairs
     std::vector<BookEmit> emits_;
+    std::vector<uint8_t> batch_;       // messages of the current frame, back to back, each self-framed by its SBE header
+    uint64_t pending_ = 0;             // messages in batch_
     std::deque<SnapshotRequest> requests_;
     FrameTokens frame_;                // "$." field tokens of the current frame
     std::string_view kind_;            // the `kind` role value of the current frame, when frame-scope
