@@ -29,6 +29,16 @@ private:
     std::ostream& out_;
 };
 
+// Counts and discards: for measuring the gateway without a publisher's cost.
+class NullPublisher final : public Publisher {
+public:
+    bool publish(const uint8_t*, size_t) noexcept override { ++n_; return true; }
+    std::string describe() const override { return "null"; }
+    uint64_t published() const noexcept { return n_; }
+private:
+    uint64_t n_ = 0;
+};
+
 #if FEEDS_WITH_AERON
 struct AeronPublisherConfig {
     std::string channel = "aeron:ipc";

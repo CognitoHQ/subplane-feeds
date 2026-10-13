@@ -23,7 +23,7 @@ build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdo
 build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
 ```
 
-`--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
+`--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
 
 ## What a pack is
 

@@ -8,6 +8,7 @@
 
 #include "book/book.h"
 #include "instruments.h"
+#include "latency.h"
 #include "mapper.h"
 #include "pack.h"
 #include "publisher.h"
@@ -57,6 +58,8 @@ public:
     // The subscribe messages in send order, with the pack's placeholders expanded.
     std::vector<std::string> subscribe_messages() const;
     const GatewayStats& stats() const noexcept { return stats_; }
+    // Wall time from entering on_frame to the last offer of that frame (frames that published something).
+    const LatencyHistogram& frame_latency() const noexcept { return lat_; }
     uint64_t sequence() const noexcept { return seq_; }
     uint64_t resyncs() const noexcept;
 
@@ -67,6 +70,7 @@ private:
     void publish_heartbeat(uint64_t now) noexcept;
     void publish_definitions(uint64_t now) noexcept;
     void publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept;
+    void process_frame(std::string_view json, uint64_t recv_ts);
     void handle_record(const StreamDef& sd, const Instrument* in, simdjson::ondemand::object& rec, std::string_view kind, uint64_t recv_ts) noexcept;
     void cache_frame_tokens(const StreamDef& sd, simdjson::ondemand::object& root) noexcept;
     bool prepare(std::string_view json) noexcept; // copies into the padded buffer
@@ -84,8 +88,9 @@ private:
     std::vector<BookEmit> emits_;
     std::deque<SnapshotRequest> requests_;
     FrameTokens frame_;                // "$." field tokens of the current frame
-    std::string kind_;                 // the `kind` role value of the current frame, when frame-scope
+    std::string_view kind_;            // the `kind` role value of the current frame, when frame-scope
     GatewayStats stats_;
+    LatencyHistogram lat_;
     uint64_t seq_ = 0, last_heartbeat_ = 0, last_definitions_ = 0;
     uint32_t errors_logged_ = 0;
 };

@@ -112,7 +112,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
             });
             return;
         }
-        if (cbs.on_connected) cbs.on_connected(now_ns());
+        if (cbs.on_connected) cbs.on_connected(cbs.ctx, now_ns());
         read();
         if (!opts.ping_text.empty() && opts.ping_every_s) arm_ping();
     }
@@ -134,7 +134,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
         stream->async_read(buffer, [self](beast::error_code ec, size_t) {
             if (ec) { self->fail("read", ec.message()); return; }
             const uint64_t ts = now_ns();
-            if (self->cbs.on_frame) self->cbs.on_frame(std::string_view(static_cast<const char*>(self->buffer.cdata().data()), self->buffer.size()), ts);
+            if (self->cbs.on_frame) self->cbs.on_frame(self->cbs.ctx, std::string_view(static_cast<const char*>(self->buffer.cdata().data()), self->buffer.size()), ts);
             self->buffer.consume(self->buffer.size());
             self->read();
         });
@@ -147,7 +147,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
         ping_timer.cancel();
         if (stream) { beast::error_code ec; beast::get_lowest_layer(*stream).socket().close(ec); }
         stream.reset();
-        if (was && cbs.on_disconnected) cbs.on_disconnected(now_ns(), std::string(where) + ": " + why);
+        if (was && cbs.on_disconnected) cbs.on_disconnected(cbs.ctx, now_ns(), std::string(where) + ": " + why);
         if (stopping) return;
         std::fprintf(stderr, "spwsgw: %s: %s; reconnecting in %llu ms\n", where, why.c_str(), static_cast<unsigned long long>(backoff_ms));
         ++reconnects;

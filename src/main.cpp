@@ -1,7 +1,7 @@
 // spwsgw: one exchange connection per box, canonical SBE out over Aeron.
 //
 //   spwsgw --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
-//                    [--registry packs/registry.yaml] [--out aeron|stdout] [--channel aeron:ipc] [--stream-id 1001]
+//                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001]
 //                    [--aeron-dir D] [--embedded-driver] [--record frames.jsonl] [--replay frames.jsonl]
 //                    [--snapshot-every 100] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
 //   spwsgw models        # the canonical messages and fields a pack can target
@@ -35,7 +35,7 @@ void on_signal(int) { g_stop = 1; }
 [[maybe_unused]] uint64_t now_ns() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); }
 
 void usage() {
-    std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout] [--channel C]\n"
+    std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
                "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--quiet]\n"
                "       spwsgw models\n", stderr);
@@ -77,6 +77,9 @@ void print_stats(const Gateway& gw, FILE* f) {
                  (unsigned long long)s.definitions, (unsigned long long)s.map_errors, (unsigned long long)s.book_errors, (unsigned long long)s.parse_errors,
                  (unsigned long long)s.unmatched_streams, (unsigned long long)s.unknown_symbols, (unsigned long long)s.acks,
                  (unsigned long long)gw.resyncs(), (unsigned long long)gw.sequence());
+    const LatencyHistogram& h = gw.frame_latency();
+    std::fprintf(f, "frame_to_offer_ns: n=%llu p50=%llu p99=%llu p999=%llu max=%llu mean=%llu\n", (unsigned long long)h.count(), (unsigned long long)h.quantile(0.5),
+                 (unsigned long long)h.quantile(0.99), (unsigned long long)h.quantile(0.999), (unsigned long long)h.max(), (unsigned long long)h.mean());
 }
 
 } // namespace
@@ -124,9 +127,12 @@ int main(int argc, char** argv) {
     std::unique_ptr<Publisher> owned;
     Publisher* pub = nullptr;
     StdoutPublisher stdout_pub(std::cout);
+    NullPublisher null_pub;
     const std::string out = get("out", "aeron");
     if (out == "stdout") {
         pub = &stdout_pub;
+    } else if (out == "null") {
+        pub = &null_pub;
     } else if (out == "aeron") {
 #if FEEDS_WITH_AERON
         AeronPublisherConfig ac;
@@ -140,7 +146,7 @@ int main(int argc, char** argv) {
 #else
         std::fputs("spwsgw: built without Aeron; use --out stdout\n", stderr); return 2;
 #endif
-    } else { std::fprintf(stderr, "spwsgw: --out must be aeron or stdout\n"); return 2; }
+    } else { std::fprintf(stderr, "spwsgw: --out must be aeron, stdout or null\n"); return 2; }
 
     Recorder recorder;
     Recorder* rec = nullptr;
@@ -173,10 +179,12 @@ int main(int argc, char** argv) {
     wo.ping_text = pack.connect.ping_text;
     wo.ping_every_s = pack.connect.ping_every_s;
     wo.reconnect_before_s = pack.connect.reconnect_before_s;
+    struct Ctx { Gateway* gw; bool quiet; } ctx{&gw, quiet};
     WsCallbacks cbs;
-    cbs.on_frame = [&](std::string_view f, uint64_t ts) { gw.on_frame(f, ts); };
-    cbs.on_connected = [&](uint64_t ts) { if (!quiet) std::fputs("spwsgw: connected and subscribed\n", stderr); gw.on_connected(ts); };
-    cbs.on_disconnected = [&](uint64_t ts, const std::string&) { gw.on_disconnected(ts); };
+    cbs.ctx = &ctx;
+    cbs.on_frame = [](void* c, std::string_view f, uint64_t ts) { static_cast<Ctx*>(c)->gw->on_frame(f, ts); };
+    cbs.on_connected = [](void* c, uint64_t ts) { Ctx* x = static_cast<Ctx*>(c); if (!x->quiet) std::fputs("spwsgw: connected and subscribed\n", stderr); x->gw->on_connected(ts); };
+    cbs.on_disconnected = [](void* c, uint64_t ts, const std::string&) { static_cast<Ctx*>(c)->gw->on_disconnected(ts); };
     WsClient client(io, wo, cbs);
     client.start();
 

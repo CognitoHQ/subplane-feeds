@@ -14,10 +14,12 @@ namespace boost::asio { class io_context; }
 
 namespace feeds {
 
+// Plain function pointers with a context: one indirect call per frame, nothing type-erased on the path.
 struct WsCallbacks {
-    std::function<void(std::string_view frame, uint64_t recv_ts)> on_frame;
-    std::function<void(uint64_t now)> on_connected;      // after the subscribe message was sent
-    std::function<void(uint64_t now, const std::string& why)> on_disconnected;
+    void* ctx = nullptr;
+    void (*on_frame)(void* ctx, std::string_view frame, uint64_t recv_ts) = nullptr;
+    void (*on_connected)(void* ctx, uint64_t now) = nullptr;      // after the subscribe messages were sent
+    void (*on_disconnected)(void* ctx, uint64_t now, const std::string& why) = nullptr;
 };
 
 struct WsOptions {

@@ -215,16 +215,16 @@ void Gateway::publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept {
 // `kind` role) into text first, then iterate.
 void Gateway::cache_frame_tokens(const StreamDef& sd, simdjson::ondemand::object& root) noexcept {
     frame_.reset(sd.fields.size());
-    kind_.clear();
+    kind_ = {};
     for (size_t i = 0; i < sd.fields.size(); ++i) {
         const FieldMap& f = sd.fields[i];
         if (!f.frame_scope) continue;
         simdjson::ondemand::value v;
         std::string_view tok;
         if (!walk(root, f.path, v) || !read_token(v, tok)) continue;
-        frame_.text[i].assign(tok.data(), tok.size());
+        frame_.text[i] = tok;
         frame_.present[i] = true;
-        if (f.target == "kind") kind_ = frame_.text[i];
+        if (f.target == "kind") kind_ = tok;
     }
 }
 
@@ -272,8 +272,15 @@ void Gateway::handle_record(const StreamDef& sd, const Instrument* in, simdjson:
 }
 
 void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
+    const uint64_t t0 = mono_ns();
+    const uint64_t before = stats_.published;
     ++stats_.frames;
     if (rec_) rec_->frame(recv_ts, json);
+    process_frame(json, recv_ts);
+    if (stats_.published != before) { const uint64_t d = mono_ns() - t0; lat_.record(d); lat_.note_max(d); }
+}
+
+void Gateway::process_frame(std::string_view json, uint64_t recv_ts) {
     const ConnectDef& c = pack_.connect;
     if (!c.ping_reply.empty() && trim(json) == c.ping_reply) { ++stats_.acks; return; }
     prepare(json);
@@ -284,12 +291,12 @@ void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
 
     const StreamDef* sd = nullptr;
     const Instrument* in = nullptr;
-    std::string kind;          // owned: the route value's storage may be reused once we walk on
+    std::string_view kind;     // a view into the frame or simdjson's string buffer; valid for this frame
     if (c.use_route) {
         simdjson::ondemand::value v;
         std::string_view type;
         if (!walk(root, c.route_type, v) || !read_token(v, type)) { ++stats_.acks; return; }   // subscribe ack, error, status
-        kind.assign(type.data(), type.size());
+        kind = type;
         sd = pack_.find_by_kind(kind);
         if (!sd) { ++stats_.unmatched_streams; return; }
         if (c.route_symbol_frame || !sd->has_each) {
@@ -311,7 +318,7 @@ void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
             std::string_view type;
             if (root[c.wrapper_type].get_string().get(type) != simdjson::SUCCESS) { ++stats_.acks; return; }
             if (!sd->accepts(type)) { ++stats_.acks; return; }
-            kind.assign(type.data(), type.size());
+            kind = type;
         }
     }
 

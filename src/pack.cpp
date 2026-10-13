@@ -318,6 +318,7 @@ bool Pack::load_text(const std::string& yaml, const Registry& base, Pack& out, s
             sd.message = n["message"].as<std::string>("");
             sd.book = n["book"].as<std::string>("");
             if (sd.message.empty() == sd.book.empty()) { err = where + ": exactly one of 'message' or 'book' is required"; return false; }
+            if (n["fields"] && n["fields"].IsMap() && n["fields"].size() > 32) { err = where + ": at most 32 fields per stream"; return false; }
             if (!sd.message.empty()) {
                 sd.msg = find_message(sd.message);
                 if (!sd.msg) { err = where + ": unknown canonical message '" + sd.message + "'"; return false; }

@@ -28,6 +28,10 @@ Each (book stream, instrument) pair owns a strategy and a local book. Strategies
 
 Subscribe messages (one or several, from the pack's templates) are written one after another right after the handshake; `--subscribe` prints them without connecting. WebSocket ping frames are answered by the client; an application-level text ping (`connect.ping`) is sent on its own timer and its reply dropped before parsing.
 
-## Counters
+## Counters and latency
 
-Printed on exit and every minute: frames, published, dropped, per-type counts, mapping/book/parse errors, unmatched streams, unknown symbols, acks, resyncs, last sequence.
+Printed on exit and every minute: frames, published, dropped, per-type counts, mapping/book/parse errors, unmatched streams, unknown symbols, acks, resyncs, last sequence, and `frame_to_offer_ns`: a log histogram (p50, p99, p999, max, mean) of the wall time from entering `on_frame` to the last offer of that frame, over frames that published something. It includes the publisher's cost, so measure the gateway itself with `--out null` (counts and discards). On the 2026-10-13 fixtures replayed on the dev host with `--out null`: Binance p50 0.7 µs, p99 10 to 15 µs (depth diffs with many levels), Kraken p50 0.7 to 1 µs, Coinbase p50 1.7 µs, OKX p50 0.9 to 1.4 µs; `--out stdout` roughly doubles the p50 with iostream formatting.
+
+## On the path
+
+One I/O thread, no queue, no lock. Per frame: one indirect call from the WebSocket client (a function pointer with a context, not `std::function`), one simdjson On Demand parse, string views into the frame for frame-scope values, no allocation after warm-up (error strings are built only when a record fails). Per published message one virtual call into the publisher; per book record one virtual call into the strategy. The publisher stays per message because the agent's contract is one canonical message per Aeron offer.
