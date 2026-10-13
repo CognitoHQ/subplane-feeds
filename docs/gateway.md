@@ -30,7 +30,7 @@ Subscribe messages (one or several, from the pack's templates) are written one a
 
 ## Counters and latency
 
-Printed on exit and every minute: frames, published, dropped, per-type counts, mapping/book/parse errors, unmatched streams, unknown symbols, acks, resyncs, last sequence, and `frame_to_offer_ns`: a log histogram (p50, p99, p999, max, mean) of the wall time from entering `on_frame` to the last offer of that frame, over frames that published something. It includes the publisher's cost, so measure the gateway itself with `--out null` (counts and discards). On the 2026-10-13 fixtures replayed on the dev host with `--out null`: Binance p50 0.7 µs, p99 10 to 15 µs (depth diffs with many levels), Kraken p50 0.7 to 1 µs, Coinbase p50 1.7 µs, OKX p50 0.9 to 1.4 µs; `--out stdout` roughly doubles the p50 with iostream formatting.
+Printed on exit and every minute: frames, published, dropped, per-type counts, mapping/book/parse errors, unmatched streams, unknown symbols, acks, resyncs, last sequence, and `frame_to_offer_ns`: a log-linear histogram (a copy of the agent's, `src/latency_hist.h`, so both repos report on the same bucket edges; p50, p99, p999, max, mean) of the wall time from entering `on_frame` to the last offer of that frame, over frames that published something. It includes the publisher's cost, so measure the gateway itself with `--out null` (counts and discards). On the 2026-10-13 fixtures replayed on the dev host with `--out null`: Binance p50 0.7 µs, p99 10 to 15 µs (depth diffs with many levels), Kraken p50 0.7 to 1 µs, Coinbase p50 1.7 µs, OKX p50 0.9 to 1.4 µs; `--out stdout` roughly doubles the p50 with iostream formatting.
 
 ## On the path
 
