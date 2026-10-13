@@ -1,0 +1,7 @@
+build/
+*.o
+*.a
+*.so
+.venv/
+# Private notes
+.subplane/

@@ -1,0 +1,75 @@
+cmake_minimum_required(VERSION 3.30)
+project(subplane_feeds VERSION 0.1.0 LANGUAGES C CXX)
+
+# Same toolchain floor as the agent: C++20, GCC 11 on Ubuntu 22.04.
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+
+option(FEEDS_BUILD_TESTS "Build unit and fixture tests" ON)
+option(FEEDS_WERROR "Treat warnings as errors" ON)
+option(FEEDS_WITH_AERON "Build the Aeron publisher (fetches the Aeron C client + media driver)" ON)
+option(FEEDS_WITH_NETWORK "Build the WebSocket/REST client (needs Boost.Beast + OpenSSL)" ON)
+set(SUBPLANE_BUILD_DIR "" CACHE PATH "An agent build directory (subplaned, views_app) for the end-to-end test; empty skips it")
+
+find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(YAML_CPP REQUIRED IMPORTED_TARGET yaml-cpp)
+
+add_library(feeds_warnings INTERFACE)
+target_compile_options(feeds_warnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion)
+if(FEEDS_WERROR)
+    target_compile_options(feeds_warnings INTERFACE -Werror)
+endif()
+
+add_library(doctest INTERFACE)
+target_include_directories(doctest INTERFACE third_party/doctest)
+
+include(cmake/simdjson.cmake)
+if(FEEDS_WITH_AERON)
+    include(cmake/aeron.cmake)
+endif()
+
+# Everything that is not the network client: pack, mapping, book strategies, publishers, replay.
+# Builds and tests without Boost, so the data path is testable from recorded frames alone.
+add_library(feeds_core STATIC
+    src/pack.cpp
+    src/json_path.cpp
+    src/decimal.cpp
+    src/mapper.cpp
+    src/instruments.cpp
+    src/book/binance_diff.cpp
+    src/publisher_stdout.cpp
+    src/replayer.cpp
+    src/recorder.cpp
+    src/gateway.cpp
+)
+target_include_directories(feeds_core PUBLIC src contract)
+target_link_libraries(feeds_core PUBLIC PkgConfig::YAML_CPP feeds_simdjson Threads::Threads PRIVATE feeds_warnings)
+if(FEEDS_WITH_AERON)
+    target_sources(feeds_core PRIVATE src/publisher_aeron.cpp)
+    target_link_libraries(feeds_core PUBLIC feeds_aeron)
+    target_compile_definitions(feeds_core PUBLIC FEEDS_WITH_AERON=1)
+endif()
+
+add_executable(subplane-gateway src/main.cpp)
+target_link_libraries(subplane-gateway PRIVATE feeds_core feeds_warnings)
+if(FEEDS_WITH_NETWORK)
+    find_package(Boost 1.74 REQUIRED)
+    find_package(OpenSSL REQUIRED)
+    target_sources(subplane-gateway PRIVATE src/ws_client.cpp src/rest_client.cpp)
+    target_include_directories(subplane-gateway SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+    target_link_libraries(subplane-gateway PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    target_compile_definitions(subplane-gateway PRIVATE FEEDS_WITH_NETWORK=1)
+endif()
+install(TARGETS subplane-gateway DESTINATION bin)
+
+if(FEEDS_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

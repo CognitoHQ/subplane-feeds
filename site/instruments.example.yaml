@@ -1,0 +1,5 @@
+# Venue symbol -> InstrumentId. Ids are the apps' filter keys: keep them stable.
+instruments:
+  BTCUSDT: { id: 1, base: BTC, quote: USDT }
+  ETHUSDT: { id: 2, base: ETH, quote: USDT }
+  SOLUSDT: { id: 3, base: SOL, quote: USDT }

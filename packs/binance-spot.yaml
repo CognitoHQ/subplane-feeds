@@ -1,0 +1,37 @@
+# Binance spot, public market data. Combined streams over one connection:
+# every frame is {"stream": "<symbol>@<kind>", "data": {...}}.
+exchange: binance-spot
+venue_id: 10
+connect:
+  url: wss://stream.binance.com:9443/stream
+  wrapper: { stream: stream, data: data }
+  subscribe: { method: SUBSCRIBE, params: "{streams}", id: 1 }
+  symbol_case: lower                 # stream names are lowercase; payload "s" is uppercase
+  reconnect_before_s: 82800          # Binance closes a connection at 24 h; leave early
+streams:
+  - name: "{symbol}@trade"
+    message: Trade
+    fields:
+      ExchangeTs: { path: T, unit: ms }
+      Price:      { path: p, type: decimal }
+      Qty:        { path: q, type: decimal }
+      TradeId:    { path: t }
+      Aggressor:  { path: m, map: { "true": Sell, "false": Buy } }   # m = buyer is the maker, so the seller aggressed
+  - name: "{symbol}@bookTicker"
+    message: Quote
+    fields:
+      BidPx:  { path: b, type: decimal }
+      BidQty: { path: B, type: decimal }
+      AskPx:  { path: a, type: decimal }
+      AskQty: { path: A, type: decimal }
+  - name: "{symbol}@depth@100ms"
+    book: binance_diff
+    fields:
+      first_id:   U
+      last_id:    u
+      bids:       b
+      asks:       a
+      ExchangeTs: { path: E, unit: ms }
+    snapshot:
+      url: "https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit=1000"
+      fields: { last_id: lastUpdateId, bids: bids, asks: asks }

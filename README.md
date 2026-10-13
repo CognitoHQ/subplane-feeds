@@ -1,0 +1,59 @@
+# subplane-feeds
+
+Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/satyan-g/subplane) agent. One `subplane-gateway` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
+
+```
+Binance (wss) -> subplane-gateway --pack packs/binance-spot.yaml -> Aeron -> subplaned -> shared-memory ring -> apps
+```
+
+## Why
+
+Every crypto shop rewrites the same layer in Python per process: connect, parse JSON, keep a book, hand ticks to a strategy. Exchanges cap connections per IP and JSON parsing is the whole cost. This does it once per box in C++ with a microsecond handoff, and apps read typed canonical messages without knowing which exchange they came from.
+
+## Run it
+
+```bash
+sudo apt install libboost-dev libssl-dev libyaml-cpp-dev   # CMake 3.30+ (see scripts/deps-2204.sh on Ubuntu 22.04)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+
+# Dry run against Binance, canonical messages as text:
+build/subplane-gateway --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
+
+# For real: Aeron IPC into an agent whose partition is `transport: {type: aeron, channel: "aeron:ipc", stream_id: 1001}`
+build/subplane-gateway --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
+```
+
+`--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
+
+## What a pack is
+
+```yaml
+exchange: binance-spot
+venue_id: 10
+connect:
+  url: wss://stream.binance.com:9443/stream
+  subscribe: { method: SUBSCRIBE, params: "{streams}", id: 1 }
+streams:
+  - name: "{symbol}@trade"
+    message: Trade
+    fields:
+      ExchangeTs: { path: T, unit: ms }
+      Price:      { path: p, type: decimal }     # "65432.10000000" -> int64 65432100000000 (1e-9 units), no floating point
+      Aggressor:  { path: m, map: { "true": Sell, "false": Buy } }
+  - name: "{symbol}@depth@100ms"
+    book: binance_diff                            # a compiled-in strategy for what YAML cannot say
+    fields: { first_id: U, last_id: u, bids: b, asks: a }
+    snapshot: { url: "https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
+```
+
+The mapping vocabulary is closed on purpose: `path`, `type`, `unit`, `scale`, `map`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
+
+## Contract with the agent
+
+Only two things: `contract/subplane_canonical.xml` (schema id 100) with its generated header, both copied from the agent repo, and the rule "one canonical message per Aeron offer, `Sequence` in the message". No shared library in either direction.
+
+## Status
+
+Binance spot: trades, best bid/offer, diff-depth book with snapshot sync. Coinbase next. Tests: unit (`feeds_test`), a recorded-fixture replay, and an end-to-end run through a local agent build (`-DSUBPLANE_BUILD_DIR=...`).
+
+Licence: Apache-2.0.
