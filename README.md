@@ -3,8 +3,25 @@
 Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/satyan-g/subplane) agent. One `spwsgw` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
 
 ```
-Binance (wss) -> spwsgw --pack packs/binance-spot.yaml -> Aeron -> subplaned -> shared-memory ring -> apps
+                     exchange box                               the application box
+ ┌────────────┐               ┌─────────────────────┐          ┌────────────────────────────┐      ┌───────────┐
+ │  Exchange  │   WSS / JSON  │  spwsgw             │  Aeron   │  subplaned                 │ SHM  │  app      │
+ │  Binance   │──────────────▶│  pack: binance-spot │─────────▶│  partition: crypto         │─────▶│  views    │
+ │  Coinbase  │  exchange's   │  registry           │ canonical│   transport: aeron         │ ring │  codec    │
+ │  Kraken    │  own format,  │  JSON → canonical   │  SBE,    │   framing: packet          │ per  │  filter   │
+ │  ...       │  REST         │  book strategies    │  one msg │   decoder: sbe_routing     │ sess │  by id    │
+ └────────────┘  snapshots    │  instruments → ids  │  per     │   (InstrumentId, Sequence, │      └───────────┘
+                              │  Sequence, Heartbeat│  offer,  │    ExchangeTs, VenueId)    │ ┌───────────┐
+      one process per pack    │  InstrumentDefinition  gap-free│  sessions: filter + ring   │ │  app 2    │
+                              └─────────────────────┘          │  LVC, control, HTTP        │ └───────────┘
+                                                               └────────────────────────────┘
+ ┌────────────┐  multicast / TCP / Aeron, publisher's own SBE, DBN, FlatBuffers    ▲
+ │ CME, bus,  │──────────────────────────────────────────────────────────────────────┘
+ │ Databento  │  no gateway: the agent routes on the schema and delivers the bytes untouched
+ └────────────┘
 ```
+
+Bytes change shape once, in the gateway. From Aeron onward every hop carries the same canonical SBE with the 32-byte prefix at fixed offsets; the agent and the ring never decode a body. Feeds that already publish a routable binary format go into the agent directly and never pass through here.
 
 ## Why
 
