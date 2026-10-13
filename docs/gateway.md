@@ -34,21 +34,24 @@ Printed on exit and every minute: frames, published, dropped, per-type counts, m
 
 ## End to end, measured live
 
-2026-10-13, Binance spot, BTCUSDT/ETHUSDT/SOLUSDT, 30 s, 7921 messages: `spwsgw` (core 3) -> Aeron IPC, embedded driver in the agent, shared mode -> `subplaned` (core 2) -> ring -> `views_app --spin --latency` (core 4), Ryzen 5 3600, Ubuntu 22.04 container, no core isolation, one CLOCK_REALTIME on all three.
+2026-10-13, Binance spot, BTCUSDT/ETHUSDT/SOLUSDT, 30 s per run: `spwsgw` (core 3) -> Aeron IPC, embedded driver in the agent, shared mode -> `subplaned` (pipeline on core 2, its other threads on core 5) -> ring -> `views_app --spin --latency` (core 4), Ryzen 5 3600, Ubuntu 22.04 container with `--shm-size=2g`, no core isolation, one CLOCK_REALTIME on all three. Hops are differences of three stamps per message: the gateway's `RecvTs` (frame receive), the agent's `ingest_ts` (poll), the app's read.
 
-| Hop | p50 | p90 | p99 | max |
-|---|---|---|---|---|
-| gateway frame receive to Aeron offer (`frame_to_offer_ns`, live) | 4.1 µs | | 49 µs | 530 µs |
-| gateway receive to agent receive (`gw_to_agent`) | 20 µs | 57 µs | 131 µs | 710 µs |
-| agent receive to ring write (agent `recv_to_publish`) | 1.5 µs | 8 µs | 25 µs | 48 µs |
-| agent receive to app read (`agent_to_app`) | 6.1 µs | 20 µs | 41 µs | 2.8 ms |
-| gateway receive to app read (`gw_to_app`) | 28.7 µs | 65 µs | 164 µs | 2.8 ms |
+Per message type, gateway receive to agent poll, with the gateway spinning (`--spin`):
 
-The Aeron IPC hop (gateway offer to agent poll) is about 16 µs p50 by subtraction, larger than an IPC log hand-off should be; candidates are the publisher's offer path, the agent's `sched_yield` idle on a shared core, and the container's lack of isolation. Not yet explained. The TLS and WebSocket read in front of `RecvTs` is not in these numbers. One Binance depth resync occurred in the 30 s (0 in the earlier 6 s run).
+| Message | p50 | p90 | Why |
+|---|---|---|---|
+| Trade | 1.3 µs | 1.5 µs | one message per frame: parse, map, offer |
+| Quote | 0.7 µs | 1.0 µs | same |
+| BookUpdate | 28 µs | 28 µs | one depth frame yields a median of 13 and p90 of 72 BookUpdates, about 400 ns of work per level, and every message of the frame leaves when the frame is done |
+| BookSnapshot (initial) | 570 µs | | a 1000-level REST body parsed and applied |
+
+Without `--spin` the gateway's core sleeps in `epoll_wait` between frames and wakes cold: Trade and Quote were 4 to 6 µs p50 under the same conditions. Agent poll to app read is 0.7 µs p50 for single-message packets and 5 µs for the records of a batched depth frame (the agent decodes the batch's messages in order; each record's read waits for its predecessors). The Aeron IPC hop itself, measured with a synthetic publisher at 20 to 1000 messages per second, is 1.3 µs p50 publisher stamp to agent poll and 2 to 2.6 µs to the app read, in the container and on the host alike. What was first read as a slow Aeron hop (16 to 20 µs p50 over all messages) is the message-weighted cost of depth frames; the book's data structure (a sorted vector of a thousand levels, replaced by a map on 2026-10-13) was not the dominant term: replay numbers barely moved.
+
+What would move the BookUpdate number, in order of effect: not emitting updates deeper than the published depth (most changes are deep; a strategy option), cutting the per-level work (decimal parse, map insert with allocation, a 72-byte message built from scratch and copied into the batch), and a schema change that carries a frame's levels in one message. None is done; the choice is a design decision.
 
 ## On the path
 
-One I/O thread, no queue, no lock. Per frame: one indirect call from the WebSocket client (a function pointer with a context, not `std::function`), one simdjson On Demand parse, string views into the frame for frame-scope values, no allocation after warm-up (error strings are built only when a record fails). Per book record one virtual call into the strategy; per offer one virtual call into the publisher.
+One I/O thread, no queue, no lock. Per frame: one indirect call from the WebSocket client (a function pointer with a context, not `std::function`), one simdjson On Demand parse, string views into the frame for frame-scope values, no allocation after warm-up (error strings are built only when a record fails). Per book record one virtual call into the strategy; per offer one virtual call into the publisher. `--spin` polls the io_context instead of sleeping so the core stays hot between frames; pin it with `taskset`.
 
 ## Batching
 

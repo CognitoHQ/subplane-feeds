@@ -37,7 +37,7 @@ void on_signal(int) { g_stop = 1; }
 void usage() {
     std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
                "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
-               "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--quiet]\n"
+               "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--spin] [--quiet]\n"
                "       spwsgw models\n", stderr);
 }
 
@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
     std::set<std::string> flags;
     const std::set<std::string> valued = {"pack", "registry", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
                                           "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds"};
-    const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe"};
+    const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe", "spin"};
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
         if (k.rfind("--", 0) != 0) { std::fprintf(stderr, "spwsgw: unexpected argument %s\n", argv[i]); usage(); return 2; }
@@ -215,7 +215,15 @@ int main(int argc, char** argv) {
         });
     };
     arm();
-    io.run();
+    if (flags.count("spin")) {
+        // INTENT: io.run() sleeps in epoll between frames, so the core drops into a
+        // C-state and the next frame is processed cold and slow (measured 2026-10-13:
+        // depth frames took 2.5x longer live than on replay). Polling keeps the core hot
+        // at the price of owning it; pin it with taskset.
+        while (!io.stopped()) { if (io.poll() == 0) { for (int i = 0; i < 64; ++i) __builtin_ia32_pause(); } }
+    } else {
+        io.run();
+    }
     print_stats(gw, stderr);
     pub->close();
     return 0;
