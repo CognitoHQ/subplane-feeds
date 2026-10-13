@@ -15,13 +15,13 @@ Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subp
       one process per pack    │  InstrumentDefinition  gap-free│  sessions: filter + ring   │ │  app 2    │
                               └─────────────────────┘          │  LVC, control, HTTP        │ └───────────┘
                                                                └────────────────────────────┘
- ┌────────────┐  multicast / TCP / Aeron, publisher's own SBE, DBN, FlatBuffers    ▲
- │ CME, bus,  │──────────────────────────────────────────────────────────────────────┘
- │ Databento  │  no gateway: the agent routes on the schema and delivers the bytes untouched
+ ┌────────────┐  UDP multicast, the firm's own SBE schema                           ▲
+ │ internal   │──────────────────────────────────────────────────────────────────────┘
+ │ SBE bus    │  the agent's primary ingest: route on the schema, deliver the bytes untouched
  └────────────┘
 ```
 
-Bytes change shape once, in the gateway. From Aeron onward every hop carries the same canonical SBE with the 32-byte prefix at fixed offsets; the agent and the ring never decode a body. Feeds that already publish a routable binary format go into the agent directly and never pass through here.
+Two ways into the agent. The firm's internal SBE bus is what `subplaned` was built for. Every external feed comes in through a gateway like this one, normalised to the canonical schema, so apps see one schema whatever the source; today that is exchange WebSocket feeds, later FIX, Kafka and vendor feeds as sibling handlers in this repo. Bytes change shape once, in the gateway; from Aeron onward every hop carries the same canonical SBE with the 32-byte prefix at fixed offsets, and the agent and the ring never decode a body. (The agent can also ingest some external formats directly, DBN and FlatBuffers, because its routing core is encoding-blind; that is an option for a feed already on the wire, not the recommended route.)
 
 ## Why
 
