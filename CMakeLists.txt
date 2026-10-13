@@ -39,11 +39,14 @@ endif()
 # Builds and tests without Boost, so the data path is testable from recorded frames alone.
 add_library(feeds_core STATIC
     src/pack.cpp
+    src/registry.cpp
     src/json_path.cpp
     src/decimal.cpp
     src/mapper.cpp
     src/instruments.cpp
+    src/book/book.cpp
     src/book/binance_diff.cpp
+    src/book/l2_inband.cpp
     src/publisher_stdout.cpp
     src/replayer.cpp
     src/recorder.cpp

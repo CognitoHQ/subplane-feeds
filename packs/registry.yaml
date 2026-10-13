@@ -1,0 +1,14 @@
+# Named pieces that packs share. Models and fields are the canonical schema itself
+# (`subplane-gateway models` lists them); conversions default from each field's kind.
+# A pack references these as `path@name`, e.g. `ExchangeTs: T@ms`, `Aggressor: m@taker_from_maker_bool`.
+times:
+  # built in: s, ms, us, ns, iso8601
+maps:
+  side:                   { buy: Buy, sell: Sell, BUY: Buy, SELL: Sell, b: Buy, s: Sell }
+  taker_from_maker_side:  { sell: Buy, buy: Sell }        # the message carries the maker's side; the taker aggressed
+  taker_from_maker_bool:  { "true": Sell, "false": Buy }  # Binance "m": buyer is the maker
+  bitstamp_type:          { "0": Buy, "1": Sell }
+levels:
+  # built in: pairs = [price, qty] (Binance, Coinbase snapshots, Bitstamp, OKX)
+  objects:    { kind: object, price: price, qty: qty }               # Kraken v2
+  side_pairs: { kind: array, side: 0, price: 1, qty: 2, side_map: side }   # Coinbase l2update changes

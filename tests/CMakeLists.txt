@@ -4,15 +4,21 @@ target_compile_definitions(feeds_test PRIVATE
     FEEDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME feeds_test COMMAND feeds_test)
 
-# Recorded Binance frames through the pack: output must match the expected text exactly.
-if(EXISTS ${CMAKE_SOURCE_DIR}/fixtures/binance-spot/frames.jsonl)
-    add_test(NAME fixture_binance_spot
-        COMMAND ${CMAKE_SOURCE_DIR}/tests/fixture_test.sh $<TARGET_FILE:subplane-gateway>
-                ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot)
-endif()
-
-# Gateway (replay) -> Aeron IPC -> subplaned -> ring -> views_app, when an agent build is given.
-add_test(NAME agent_e2e
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/agent_e2e.sh $<TARGET_FILE:subplane-gateway> "${SUBPLANE_BUILD_DIR}"
-            ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml)
-set_tests_properties(agent_e2e PROPERTIES SKIP_RETURN_CODE 77)
+# One fixture directory per pack (fixtures/<pack>/frames.jsonl): recorded frames through the pack must
+# reproduce expected.txt byte for byte, and the same replay must reach an app through the agent.
+file(GLOB FEEDS_FIXTURES LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/fixtures/*)
+foreach(dir ${FEEDS_FIXTURES})
+    if(NOT EXISTS ${dir}/frames.jsonl)
+        continue()
+    endif()
+    get_filename_component(name ${dir} NAME)
+    string(REPLACE "-" "_" tname ${name})
+    set(pack ${CMAKE_SOURCE_DIR}/packs/${name}.yaml)
+    add_test(NAME fixture_${tname}
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/fixture_test.sh $<TARGET_FILE:subplane-gateway> ${pack} ${dir})
+    # Gateway (replay) -> Aeron IPC -> subplaned -> ring -> views_app, when an agent build is given.
+    add_test(NAME agent_e2e_${tname}
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/agent_e2e.sh $<TARGET_FILE:subplane-gateway> "${SUBPLANE_BUILD_DIR}"
+                ${pack} ${dir} ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml)
+    set_tests_properties(agent_e2e_${tname} PROPERTIES SKIP_RETURN_CODE 77)
+endforeach()

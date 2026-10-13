@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace boost::asio { class io_context; }
 
@@ -21,7 +22,9 @@ struct WsCallbacks {
 
 struct WsOptions {
     std::string url;               // wss://host[:port]/path
-    std::string subscribe;         // sent right after the handshake (empty = nothing)
+    std::vector<std::string> subscribe;   // sent in order right after the handshake
+    std::string ping_text;         // application-level ping text (OKX "ping"); empty = WebSocket ping frames only
+    uint64_t    ping_every_s = 0;
     uint64_t    reconnect_before_s = 0;
     uint64_t    backoff_ms = 1000, max_backoff_ms = 30000;
 };

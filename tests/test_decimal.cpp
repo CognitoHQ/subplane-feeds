@@ -45,3 +45,24 @@ TEST_CASE("integers and units") {
     format_decimal(25'351'900'000, buf, sizeof buf); CHECK(std::string(buf) == "25.351900000");
     format_decimal(-1'500'000'000, buf, sizeof buf); CHECK(std::string(buf) == "-1.500000000");
 }
+
+TEST_CASE("iso8601 timestamps parse exactly to nanoseconds") {
+    uint64_t ns = 0;
+    CHECK(parse_iso8601("1970-01-01T00:00:00Z", ns)); CHECK(ns == 0);
+    CHECK(parse_iso8601("2024-01-02T03:04:05.123456Z", ns)); CHECK(ns == 1704164645123456000ull);
+    CHECK(parse_iso8601("2024-01-02T03:04:05Z", ns)); CHECK(ns == 1704164645000000000ull);
+    CHECK(parse_iso8601("2024-01-02T03:04:05.5Z", ns)); CHECK(ns == 1704164645500000000ull);
+    CHECK(parse_iso8601("2024-01-02T03:04:05.123456789Z", ns)); CHECK(ns == 1704164645123456789ull);
+    CHECK(parse_iso8601("2024-02-29T00:00:00Z", ns)); CHECK(ns == 1709164800000000000ull);   // leap day
+    CHECK(parse_iso8601("2014-11-07T08:19:27.028459Z", ns)); CHECK(ns == 1415348367028459000ull);
+    CHECK_FALSE(parse_iso8601("2024-01-02T03:04:05", ns));              // no Z
+    CHECK_FALSE(parse_iso8601("2024-01-02T03:04:05+01:00", ns));        // offsets are not accepted
+    CHECK_FALSE(parse_iso8601("2024-01-02T03:04:05.1234567890Z", ns));  // ten fraction digits
+    CHECK_FALSE(parse_iso8601("2023-02-29T00:00:00Z", ns));             // not a leap year
+    CHECK_FALSE(parse_iso8601("2024-13-01T00:00:00Z", ns));
+    CHECK_FALSE(parse_iso8601("2024-01-02 03:04:05Z", ns));
+    CHECK_FALSE(parse_iso8601("", ns));
+    CHECK(parse_time("1672515782136", TimeUnit::MS, ns)); CHECK(ns == 1672515782136000000ull);
+    CHECK(parse_time("2024-01-02T03:04:05Z", TimeUnit::ISO8601, ns)); CHECK(ns == 1704164645000000000ull);
+    CHECK_FALSE(parse_time("2024-01-02T03:04:05Z", TimeUnit::MS, ns));
+}

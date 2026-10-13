@@ -4,33 +4,33 @@ exchange: coinbase
 venue_id: 20
 connect:
   url: wss://ws-feed.exchange.coinbase.com
-  route: { type: type, symbol: product_id }                       # frame routing by fields, not by stream name
-  subscribe: { type: subscribe, product_ids: "{symbols}", channels: [matches, ticker, level2_batch, heartbeat] }
-  symbol_case: upper                                              # BTC-USD
+  route: { type: type, symbol: product_id }         # frame routing by fields, not by stream name
+  subscribe: { type: subscribe, product_ids: "{symbols}", channels: [matches, ticker, level2_batch] }
+  symbol_case: upper                                # BTC-USD
 streams:
   - name: "{symbol}@match"
-    match: match                                                  # value of the route field
+    match: [match, last_match]                      # last_match: the first frame after subscribing
     message: Trade
     fields:
-      ExchangeTs: { path: time, type: iso8601 }                   # "2014-11-07T08:19:27.028459Z"
-      Price:      { path: price, type: decimal }
-      Qty:        { path: size, type: decimal }
-      TradeId:    { path: trade_id }
-      Aggressor:  { path: side, map: { sell: Buy, buy: Sell } }   # side is the maker's side; the taker aggressed
+      ExchangeTs: time@iso8601                      # "2014-11-07T08:19:27.028459Z"
+      Price:      price
+      Qty:        size
+      TradeId:    trade_id
+      Aggressor:  side@taker_from_maker_side        # side is the maker's side; the taker aggressed
   - name: "{symbol}@ticker"
     match: ticker
     message: Quote
     fields:
-      ExchangeTs: { path: time, type: iso8601 }
-      BidPx:  { path: best_bid, type: decimal }
-      BidQty: { path: best_bid_size, type: decimal }
-      AskPx:  { path: best_ask, type: decimal }
-      AskQty: { path: best_ask_size, type: decimal }
+      ExchangeTs: time@iso8601
+      BidPx:  best_bid
+      BidQty: best_bid_size
+      AskPx:  best_ask
+      AskQty: best_ask_size
   - name: "{symbol}@level2"
-    match: [snapshot, l2update]                                   # one stream, two frame types
-    book: l2_inband                                               # snapshot arrives on the socket, then absolute-size changes
+    match: [snapshot, l2update]                     # one stream, two frame types
+    book: l2_inband                                 # snapshot on the socket, then absolute-size changes
     fields:
-      snapshot_bids: bids
-      snapshot_asks: asks
-      changes: changes                                            # [side, price, size]
-      ExchangeTs: { path: time, type: iso8601 }
+      bids: bids                                    # snapshot: [price, size] pairs
+      asks: asks
+      changes: changes@side_pairs                   # l2update: [side, price, size]
+      ExchangeTs: time@iso8601                      # absent on snapshots

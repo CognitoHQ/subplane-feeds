@@ -32,21 +32,22 @@ exchange: binance-spot
 venue_id: 10
 connect:
   url: wss://data-stream.binance.vision/stream
+  wrapper: { stream: stream, data: data }       # frames name their stream; Coinbase/Kraken/OKX route by fields instead
   subscribe: { method: SUBSCRIBE, params: "{streams}", id: 1 }
 streams:
   - name: "{symbol}@trade"
     message: Trade
     fields:
-      ExchangeTs: { path: T, unit: ms }
-      Price:      { path: p, type: decimal }     # "65432.10000000" -> int64 65432100000000 (1e-9 units), no floating point
-      Aggressor:  { path: m, map: { "true": Sell, "false": Buy } }
+      ExchangeTs: T@ms                            # path@conversion; the conversion comes from the registry
+      Price:      p                               # "65432.10000000" -> int64 65432100000000 (1e-9 units), no floating point
+      Aggressor:  m@taker_from_maker_bool
   - name: "{symbol}@depth@100ms"
     book: binance_diff                            # a compiled-in strategy for what YAML cannot say
     fields: { first_id: U, last_id: u, bids: b, asks: a }
     snapshot: { url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
 ```
 
-The mapping vocabulary is closed on purpose: `path`, `type`, `unit`, `scale`, `map`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
+The models are the canonical schema (`subplane-gateway models` lists them); conversions default from each field's kind and the named ones (time formats, enum maps, level layouts) live in `packs/registry.yaml`, so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
 
 ## Contract with the agent
 
@@ -54,6 +55,14 @@ Only two things: `contract/subplane_canonical.xml` (schema id 100) with its gene
 
 ## Status
 
-Binance spot: trades, best bid/offer, diff-depth book with snapshot sync. Coinbase next. Tests: unit (`feeds_test`), a recorded-fixture replay, and an end-to-end run through a local agent build (`-DSUBPLANE_BUILD_DIR=...`).
+| Pack | Trades | Quotes | Book | Notes |
+|---|---|---|---|---|
+| `binance-spot` | yes | bookTicker | `binance_diff` (REST snapshot + diffs) | `*.binance.vision` hosts |
+| `coinbase-exchange` | yes | ticker | `l2_inband` (snapshot on the socket, then changes) | ISO-8601 times, routed by `type` |
+| `kraken` | yes | ticker | `l2_inband` (checksum not verified) | v2, several records per frame |
+| `bitstamp` | yes | no | `snapshot_only` (full top 100 per event) | symbol at the end of the channel name |
+| `okx` | yes | tickers | not yet (`okx_seq`, see docs) | text ping/pong |
+
+Each pack has a recorded fixture (`fixtures/<pack>/`) replayed byte-for-byte in `ctest`, and the same replay runs end to end through a local agent build (`-DSUBPLANE_BUILD_DIR=...`): gateway, Aeron IPC, `subplaned`, ring, `views_app`. All recorded live on 2026-10-13 with zero mapping, book or parse errors and zero resyncs.
 
 Licence: Apache-2.0.

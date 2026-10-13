@@ -1,0 +1,3 @@
+About 2.5 s of BTC-USD and ETH-USD from `wss://ws-feed.exchange.coinbase.com` (matches, ticker, level2_batch), recorded on 2026-10-13 with `subplane-gateway --record` inside the Ubuntu 22.04 container. The two `snapshot` frames were cut to their top 100 levels per side (the originals are 0.5 MB and 1 MB); later `l2update` changes for deeper levels therefore add levels instead of updating them, which the replay handles the same way. `expected.txt` is the replay output with `--out stdout`; `tests/fixture_test.sh` diffs them. Regenerate with:
+
+    subplane-gateway --pack packs/coinbase-exchange.yaml --instruments fixtures/coinbase-exchange/instruments.yaml --out stdout --replay fixtures/coinbase-exchange/frames.jsonl --quiet > fixtures/coinbase-exchange/expected.txt

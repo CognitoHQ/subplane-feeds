@@ -1,14 +1,34 @@
 #include "gateway.h"
 
-#include "book/binance_diff.h"
 #include "canonical_encode.h"
-#include "mapper.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 namespace feeds {
+namespace {
+
+void replace_all(std::string& s, std::string_view from, std::string_view to) {
+    for (size_t pos = s.find(from); pos != std::string::npos; pos = s.find(from, pos + to.size())) s.replace(pos, from.size(), to);
+}
+// A placeholder appears quoted in the emitted JSON ("{streams}"); the replacement is a JSON value, so the quotes go too.
+void replace_value(std::string& s, std::string_view name, std::string_view json) {
+    replace_all(s, "\"{" + std::string(name) + "}\"", json);
+    replace_all(s, "{" + std::string(name) + "}", json);
+}
+// A placeholder inside a string ("{channel}", "live_trades_{symbol}") takes the text itself.
+void replace_text(std::string& s, std::string_view name, std::string_view text) {
+    replace_all(s, "{" + std::string(name) + "}", text);
+}
+std::string json_quoted(std::string_view s) { return "\"" + std::string(s) + "\""; }
+std::string array_of(const std::vector<std::string>& items) {
+    std::string a = "[";
+    for (size_t i = 0; i < items.size(); ++i) { if (i) a += ','; a += items[i]; }
+    return a + ']';
+}
+
+} // namespace
 
 Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pub, GatewayOptions opts, Recorder* rec)
     : pack_(pack), ins_(instruments), pub_(pub), opts_(opts), rec_(rec) {
@@ -16,7 +36,9 @@ Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pu
         if (sd.book.empty()) continue;
         for (const Instrument& in : ins_.all()) {
             BookSlot slot;
-            slot.strategy = std::make_unique<BinanceDiff>(pack_, sd, opts_.snapshot_every);
+            std::string err;
+            slot.strategy = make_strategy(pack_, sd, opts_.snapshot_every, err);
+            if (!slot.strategy) continue;   // the pack loader rejects unknown strategies
             slot.sd = &sd;
             slot.ins = &in;
             books_.push_back(std::move(slot));
@@ -26,24 +48,52 @@ Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pu
     emits_.reserve(1024);
 }
 
+std::string Gateway::expand(std::string_view tpl, std::string_view stream_symbol, std::string_view venue_symbol, const StreamDef* sd) const {
+    return expand_symbol(tpl, stream_symbol, venue_symbol, sd ? sd->channel : std::string_view());
+}
+
 std::vector<std::string> Gateway::stream_names() const {
     std::vector<std::string> out;
     for (const StreamDef& sd : pack_.streams)
-        for (const Instrument& in : ins_.all()) out.push_back(expand_symbol(sd.name_tpl, in.stream_symbol, in.symbol));
+        for (const Instrument& in : ins_.all()) out.push_back(expand(sd.name_tpl, in.stream_symbol, in.symbol, &sd));
     return out;
 }
 
-std::string Gateway::subscribe_message() const {
-    std::string arr = "[";
-    bool first = true;
-    for (const auto& n : stream_names()) { if (!first) arr += ','; first = false; arr += '"'; arr += n; arr += '"'; }
-    arr += ']';
-    std::string msg = pack_.connect.subscribe_json;
-    const std::string quoted = "\"{streams}\"";
-    size_t pos = msg.find(quoted);
-    if (pos != std::string::npos) msg.replace(pos, quoted.size(), arr);
-    else if ((pos = msg.find("{streams}")) != std::string::npos) msg.replace(pos, 9, arr);
-    return msg;
+std::vector<std::string> Gateway::subscribe_messages() const {
+    std::vector<std::string> symbols, streams;
+    for (const Instrument& in : ins_.all()) symbols.push_back(json_quoted(in.symbol));
+    for (const StreamDef& sd : pack_.streams)
+        for (const Instrument& in : ins_.all()) {
+            if (pack_.connect.stream_object.empty()) streams.push_back(json_quoted(expand(sd.name_tpl, in.stream_symbol, in.symbol, &sd)));
+            else streams.push_back(expand(pack_.connect.stream_object, in.stream_symbol, in.symbol, &sd));
+        }
+    std::vector<std::string> out;
+    for (const std::string& tpl : pack_.connect.subscribe) {
+        if (tpl.find("{stream}") != std::string::npos) {
+            // Once per stream name (Bitstamp: one channel per message).
+            for (const StreamDef& sd : pack_.streams)
+                for (const Instrument& in : ins_.all()) {
+                    std::string m = tpl;
+                    replace_text(m, "stream", expand(sd.name_tpl, in.stream_symbol, in.symbol, &sd));
+                    replace_value(m, "symbols", array_of(symbols));
+                    out.push_back(m);
+                }
+        } else if (tpl.find("{channel}") != std::string::npos) {
+            // Once per stream definition, with every symbol (Kraken-style per-channel subscribes).
+            for (const StreamDef& sd : pack_.streams) {
+                std::string m = tpl;
+                replace_text(m, "channel", sd.channel);
+                replace_value(m, "symbols", array_of(symbols));
+                out.push_back(m);
+            }
+        } else {
+            std::string m = tpl;
+            replace_value(m, "streams", array_of(streams));
+            replace_value(m, "symbols", array_of(symbols));
+            out.push_back(m);
+        }
+    }
+    return out;
 }
 
 uint64_t Gateway::resyncs() const noexcept {
@@ -109,7 +159,7 @@ void Gateway::tick(uint64_t now) {
     if (opts_.definitions_ms && last_definitions_ && now - last_definitions_ >= opts_.definitions_ms * 1'000'000ull) publish_definitions(now);
     for (auto& b : books_) {
         if (b.strategy->take_snapshot_request()) {
-            requests_.push_back({b.ins->symbol, expand_symbol(b.sd->snapshot.url_tpl, b.ins->stream_symbol, b.ins->symbol)});
+            requests_.push_back({b.ins->symbol, expand(b.sd->snapshot.url_tpl, b.ins->stream_symbol, b.ins->symbol, b.sd)});
             ++stats_.snapshot_requests;
         }
     }
@@ -160,39 +210,58 @@ void Gateway::publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept {
     emits_.clear();
 }
 
-void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
-    ++stats_.frames;
-    if (rec_) rec_->frame(recv_ts, json);
-    prepare(json);
-    simdjson::ondemand::document doc;
-    if (parser_.iterate(simdjson::padded_string_view(buf_.data(), buf_.size(), buf_.capacity())).get(doc) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
-    simdjson::ondemand::object obj;
-    if (doc.get_object().get(obj) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
-    std::string_view stream;
-    if (obj[pack_.connect.wrapper_stream].get_string().get(stream) != simdjson::SUCCESS) { ++stats_.acks; return; } // subscribe ack or error
-    const size_t at = stream.find('@');
-    if (at == std::string_view::npos) { ++stats_.unmatched_streams; return; }
-    const StreamDef* sd = pack_.find_by_suffix(stream.substr(at));
-    if (!sd) { ++stats_.unmatched_streams; return; }
-    const Instrument* in = ins_.by_stream_symbol(stream.substr(0, at));
-    if (!in) { ++stats_.unknown_symbols; return; }
-    simdjson::ondemand::object data;
-    if (obj[pack_.connect.wrapper_data].get_object().get(data) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
+// INTENT: simdjson On Demand walks forward; once we iterate the `each` array the
+// frame's other keys are behind us. Read every "$." field (and a frame-scope
+// `kind` role) into text first, then iterate.
+void Gateway::cache_frame_tokens(const StreamDef& sd, simdjson::ondemand::object& root) noexcept {
+    frame_.reset(sd.fields.size());
+    kind_.clear();
+    for (size_t i = 0; i < sd.fields.size(); ++i) {
+        const FieldMap& f = sd.fields[i];
+        if (!f.frame_scope) continue;
+        simdjson::ondemand::value v;
+        std::string_view tok;
+        if (!walk(root, f.path, v) || !read_token(v, tok)) continue;
+        frame_.text[i].assign(tok.data(), tok.size());
+        frame_.present[i] = true;
+        if (f.target == "kind") kind_ = frame_.text[i];
+    }
+}
 
+void Gateway::handle_record(const StreamDef& sd, const Instrument* in, simdjson::ondemand::object& rec, std::string_view kind, uint64_t recv_ts) noexcept {
+    ++stats_.records;
+    if (!in) {
+        // Route mode with a per-record symbol.
+        simdjson::ondemand::value v;
+        std::string_view sym;
+        if (!walk(rec, pack_.connect.route_symbol, v) || !read_string(v, sym)) { ++stats_.unknown_symbols; return; }
+        in = ins_.by_symbol(sym);
+        if (!in) { ++stats_.unknown_symbols; return; }
+    }
     std::string err;
-    if (sd->msg) {
+    if (sd.msg) {
         uint8_t buf[512];
-        begin_message(buf, *sd->msg, in->id, pack_.venue_id, 0, recv_ts);
-        if (!Mapper::map_flat(*sd, data, buf, err)) { ++stats_.map_errors; log_error(sd->message.c_str(), err); return; }
+        begin_message(buf, *sd.msg, in->id, pack_.venue_id, 0, recv_ts);
+        if (!Mapper::map_flat(sd, rec, sd.has_each ? &frame_ : nullptr, buf, err)) { ++stats_.map_errors; log_error(sd.message.c_str(), err); return; }
         uint64_t* counter = &stats_.other;
-        if (sd->msg->template_id == sp_canonical::Trade::kTemplateId) counter = &stats_.trades;
-        else if (sd->msg->template_id == sp_canonical::Quote::kTemplateId) counter = &stats_.quotes;
-        publish(buf, sd->msg->size, *counter);
+        if (sd.msg->template_id == sp_canonical::Trade::kTemplateId) counter = &stats_.trades;
+        else if (sd.msg->template_id == sp_canonical::Quote::kTemplateId) counter = &stats_.quotes;
+        publish(buf, sd.msg->size, *counter);
         return;
     }
+    // The `kind` role (record scope) overrides the frame type for book strategies.
+    if (const FieldMap* kr = Pack::role(sd.fields, "kind")) {
+        if (kr->frame_scope) kind = kind_;
+        else {
+            simdjson::ondemand::value v;
+            std::string_view tok;
+            if (!walk(rec, kr->path, v) || !read_token(v, tok)) { ++stats_.book_errors; log_error("book", "kind: path '" + kr->path.text + "' not found"); return; }
+            kind = tok;
+        }
+    }
     for (BookSlot& b : books_) {
-        if (b.sd != sd || b.ins != in) continue;
-        if (!b.strategy->on_event(data, recv_ts, emits_, err)) {
+        if (b.sd != &sd || b.ins != in) continue;
+        if (!b.strategy->on_event(rec, kind, recv_ts, emits_, err)) {
             if (!err.empty()) { ++stats_.book_errors; log_error("book", err); }
             emits_.clear();
             return;
@@ -202,12 +271,74 @@ void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
     }
 }
 
+void Gateway::on_frame(std::string_view json, uint64_t recv_ts) {
+    ++stats_.frames;
+    if (rec_) rec_->frame(recv_ts, json);
+    const ConnectDef& c = pack_.connect;
+    if (!c.ping_reply.empty() && trim(json) == c.ping_reply) { ++stats_.acks; return; }
+    prepare(json);
+    simdjson::ondemand::document doc;
+    if (parser_.iterate(simdjson::padded_string_view(buf_.data(), buf_.size(), buf_.capacity())).get(doc) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
+    simdjson::ondemand::object root;
+    if (doc.get_object().get(root) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
+
+    const StreamDef* sd = nullptr;
+    const Instrument* in = nullptr;
+    std::string kind;          // owned: the route value's storage may be reused once we walk on
+    if (c.use_route) {
+        simdjson::ondemand::value v;
+        std::string_view type;
+        if (!walk(root, c.route_type, v) || !read_token(v, type)) { ++stats_.acks; return; }   // subscribe ack, error, status
+        kind.assign(type.data(), type.size());
+        sd = pack_.find_by_kind(kind);
+        if (!sd) { ++stats_.unmatched_streams; return; }
+        if (c.route_symbol_frame || !sd->has_each) {
+            std::string_view sym;
+            if (!walk(root, c.route_symbol, v) || !read_string(v, sym)) { ++stats_.unknown_symbols; return; }
+            in = ins_.by_symbol(sym);
+            if (!in) { ++stats_.unknown_symbols; return; }
+        }
+    } else {
+        std::string_view stream;
+        if (root[c.wrapper_stream].get_string().get(stream) != simdjson::SUCCESS) { ++stats_.acks; return; } // subscribe ack or error
+        std::string_view sym;
+        sd = pack_.find_by_name(stream, sym);
+        if (!sd) { ++stats_.unmatched_streams; return; }
+        in = ins_.by_stream_symbol(sym);
+        if (!in) { ++stats_.unknown_symbols; return; }
+        if (!c.wrapper_type.empty()) {
+            // Bitstamp: {"event": "bts:subscription_succeeded", "channel": "live_trades_btcusd", ...} shares the channel name.
+            std::string_view type;
+            if (root[c.wrapper_type].get_string().get(type) != simdjson::SUCCESS) { ++stats_.acks; return; }
+            if (!sd->accepts(type)) { ++stats_.acks; return; }
+            kind.assign(type.data(), type.size());
+        }
+    }
+
+    if (sd->has_each) cache_frame_tokens(*sd, root);
+    if (sd->has_each) {
+        simdjson::ondemand::value v;
+        simdjson::ondemand::array arr;
+        if (!walk(root, sd->each, v) || v.get_array().get(arr) != simdjson::SUCCESS) { ++stats_.acks; return; }   // no records: an ack or a status frame
+        for (auto el : arr) {
+            simdjson::ondemand::object rec;
+            if (el.get_object().get(rec) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
+            handle_record(*sd, in, rec, kind, recv_ts);
+        }
+        return;
+    }
+    if (c.use_route) { handle_record(*sd, in, root, kind, recv_ts); return; }
+    simdjson::ondemand::object data;
+    if (root[c.wrapper_data].get_object().get(data) != simdjson::SUCCESS) { ++stats_.parse_errors; return; }
+    handle_record(*sd, in, data, kind, recv_ts);
+}
+
 void Gateway::on_snapshot(std::string_view venue_symbol, std::string_view body, uint64_t recv_ts) {
     if (rec_) rec_->snapshot(recv_ts, venue_symbol, body);
     const Instrument* in = ins_.by_symbol(venue_symbol);
     if (!in) { ++stats_.unknown_symbols; return; }
     for (BookSlot& b : books_) {
-        if (b.ins != in) continue;
+        if (b.ins != in || !b.sd->has_snapshot) continue;
         prepare(body);
         simdjson::ondemand::document doc;
         simdjson::ondemand::object obj;

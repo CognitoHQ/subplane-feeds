@@ -1,0 +1,3 @@
+instruments:
+  BTC/USD: { id: 1, base: BTC, quote: USD }
+  ETH/USD: { id: 2, base: ETH, quote: USD }

@@ -1,0 +1,3 @@
+instruments:
+  BTC-USDT: { id: 1, base: BTC, quote: USDT }
+  ETH-USDT: { id: 2, base: ETH, quote: USDT }

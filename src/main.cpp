@@ -1,9 +1,10 @@
 // subplane-gateway: one exchange connection per box, canonical SBE out over Aeron.
 //
 //   subplane-gateway --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
-//                    [--out aeron|stdout] [--channel aeron:ipc] [--stream-id 1001] [--aeron-dir D] [--embedded-driver]
-//                    [--record frames.jsonl] [--replay frames.jsonl] [--snapshot-every 100] [--heartbeat-ms 1000]
-//                    [--seconds N] [--quiet]
+//                    [--registry packs/registry.yaml] [--out aeron|stdout] [--channel aeron:ipc] [--stream-id 1001]
+//                    [--aeron-dir D] [--embedded-driver] [--record frames.jsonl] [--replay frames.jsonl]
+//                    [--snapshot-every 100] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
+//   subplane-gateway models        # the canonical messages and fields a pack can target
 
 #include "gateway.h"
 #include "replayer.h"
@@ -34,9 +35,10 @@ void on_signal(int) { g_stop = 1; }
 [[maybe_unused]] uint64_t now_ns() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); }
 
 void usage() {
-    std::fputs("usage: subplane-gateway --pack P (--instruments F | --symbols A,B) [--out aeron|stdout] [--channel C] [--stream-id N]\n"
-               "                        [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N]\n"
-               "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--quiet]\n", stderr);
+    std::fputs("usage: subplane-gateway --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout] [--channel C]\n"
+               "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N]\n"
+               "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--quiet]\n"
+               "       subplane-gateway models\n", stderr);
 }
 
 std::vector<std::string> split(const std::string& s, char sep) {
@@ -45,6 +47,25 @@ std::vector<std::string> split(const std::string& s, char sep) {
     std::string part;
     while (std::getline(ss, part, sep)) if (!part.empty()) out.push_back(part);
     return out;
+}
+
+const char* kind_name(FieldKind k) {
+    switch (k) { case FieldKind::I64: return "decimal (int64 at 1e-9)"; case FieldKind::U64: return "uint64"; case FieldKind::U32: return "uint32";
+                 case FieldKind::U16: return "uint16"; case FieldKind::U8: return "uint8"; case FieldKind::CHARS: return "chars"; case FieldKind::I64_ARRAY: return "decimal[]"; }
+    return "?";
+}
+
+// `models`: what a pack can target. Prefix fields are the gateway's; the rest take a path (and a conversion when the wire needs one).
+void print_models() {
+    std::printf("prefix (set by the gateway): InstrumentId VenueId Sequence RecvTs; ExchangeTs and Flags are mappable on every message\n");
+    for (const CanonicalMessage& m : kCanonicalMessages) {
+        std::printf("%s (template %u, %u bytes)\n", std::string(m.name).c_str(), m.template_id, m.size);
+        for (size_t i = 0; i < m.nfields; ++i) {
+            const CanonicalField& f = m.fields[i];
+            std::printf("  %-12s %s%s\n", std::string(f.name).c_str(), kind_name(f.kind), f.kind == FieldKind::CHARS ? (" [" + std::to_string(f.count) + "]").c_str() : f.kind == FieldKind::I64_ARRAY ? " (strategy only)" : "");
+        }
+    }
+    std::printf("conversions: path@<time: s ms us ns iso8601 | map name | level layout>; see packs/registry.yaml\n");
 }
 
 void print_stats(const Gateway& gw, FILE* f) {
@@ -61,11 +82,12 @@ void print_stats(const Gateway& gw, FILE* f) {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc >= 2 && std::strcmp(argv[1], "models") == 0) { print_models(); return 0; }
     std::map<std::string, std::string> a;
     std::set<std::string> flags;
-    const std::set<std::string> valued = {"pack", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
+    const std::set<std::string> valued = {"pack", "registry", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
                                           "snapshot-every", "heartbeat-ms", "definitions-ms", "seconds"};
-    const std::set<std::string> boolean = {"embedded-driver", "quiet", "help"};
+    const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe"};
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
         if (k.rfind("--", 0) != 0) { std::fprintf(stderr, "subplane-gateway: unexpected argument %s\n", argv[i]); usage(); return 2; }
@@ -83,7 +105,7 @@ int main(int argc, char** argv) {
     std::string err;
     Pack pack;
     if (!a.count("pack")) { std::fputs("subplane-gateway: --pack is required\n", stderr); usage(); return 2; }
-    if (!Pack::load(a["pack"], pack, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 2; }
+    if (!Pack::load_with_registry(a["pack"], get("registry", ""), pack, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 2; }
 
     Instruments instruments;
     if (a.count("instruments")) {
@@ -128,6 +150,7 @@ int main(int argc, char** argv) {
     }
 
     Gateway gw(pack, instruments, *pub, opts, rec);
+    if (flags.count("subscribe")) { for (const auto& m : gw.subscribe_messages()) std::printf("%s\n", m.c_str()); return 0; }
     if (!quiet) std::fprintf(stderr, "subplane-gateway: %s, %zu instruments, %zu streams -> %s\n", pack.exchange.c_str(), instruments.all().size(), gw.stream_names().size(), pub->describe().c_str());
 
     std::signal(SIGINT, on_signal);
@@ -146,7 +169,9 @@ int main(int argc, char** argv) {
     boost::asio::io_context io;
     WsOptions wo;
     wo.url = pack.connect.url;
-    wo.subscribe = gw.subscribe_message();
+    wo.subscribe = gw.subscribe_messages();
+    wo.ping_text = pack.connect.ping_text;
+    wo.ping_every_s = pack.connect.ping_every_s;
     wo.reconnect_before_s = pack.connect.reconnect_before_s;
     WsCallbacks cbs;
     cbs.on_frame = [&](std::string_view f, uint64_t ts) { gw.on_frame(f, ts); };

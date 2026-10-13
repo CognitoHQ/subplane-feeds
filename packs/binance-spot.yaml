@@ -14,26 +14,17 @@ streams:
   - name: "{symbol}@trade"
     message: Trade
     fields:
-      ExchangeTs: { path: T, unit: ms }
-      Price:      { path: p, type: decimal }
-      Qty:        { path: q, type: decimal }
-      TradeId:    { path: t }
-      Aggressor:  { path: m, map: { "true": Sell, "false": Buy } }   # m = buyer is the maker, so the seller aggressed
+      ExchangeTs: T@ms
+      Price:      p
+      Qty:        q
+      TradeId:    t
+      Aggressor:  m@taker_from_maker_bool   # m = buyer is the maker, so the seller aggressed
   - name: "{symbol}@bookTicker"
     message: Quote
-    fields:
-      BidPx:  { path: b, type: decimal }
-      BidQty: { path: B, type: decimal }
-      AskPx:  { path: a, type: decimal }
-      AskQty: { path: A, type: decimal }
+    fields: { BidPx: b, BidQty: B, AskPx: a, AskQty: A }
   - name: "{symbol}@depth@100ms"
     book: binance_diff
-    fields:
-      first_id:   U
-      last_id:    u
-      bids:       b
-      asks:       a
-      ExchangeTs: { path: E, unit: ms }
+    fields: { first_id: U, last_id: u, bids: b, asks: a, ExchangeTs: E@ms }
     snapshot:
       url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000"
       fields: { last_id: lastUpdateId, bids: bids, asks: asks }

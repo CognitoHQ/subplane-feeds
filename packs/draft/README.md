@@ -1,1 +1,0 @@
-Draft packs written against each exchange's documented frames to find what the pack vocabulary lacks. None loads yet; the loader stops at the first unknown key. What each one needs is listed in `docs/pack-format.md` under "Known gaps".

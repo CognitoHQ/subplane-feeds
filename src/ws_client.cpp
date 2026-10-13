@@ -46,14 +46,14 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
     tcp::resolver resolver;
     std::unique_ptr<ws::stream<beast::ssl_stream<beast::tcp_stream>>> stream;
     beast::flat_buffer buffer;
-    net::steady_timer timer;
+    net::steady_timer timer, ping_timer;
     WsOptions opts;
     WsCallbacks cbs;
     Url url;
     bool connected_ = false, stopping = false;
     uint64_t backoff_ms, reconnects = 0, connected_at = 0;
 
-    Impl(net::io_context& io_, WsOptions o, WsCallbacks c) : io(io_), resolver(io_), timer(io_), opts(std::move(o)), cbs(std::move(c)), backoff_ms(opts.backoff_ms) {
+    Impl(net::io_context& io_, WsOptions o, WsCallbacks c) : io(io_), resolver(io_), timer(io_), ping_timer(io_), opts(std::move(o)), cbs(std::move(c)), backoff_ms(opts.backoff_ms) {
         ssl.set_default_verify_paths();
         ssl.set_verify_mode(net::ssl::verify_peer);
     }
@@ -94,21 +94,39 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
         connected_ = true;
         connected_at = now_ns();
         backoff_ms = opts.backoff_ms;
-        auto self = shared_from_this();
-        if (!opts.subscribe.empty()) {
-            stream->async_write(net::buffer(opts.subscribe), [self](beast::error_code ec, size_t) {
-                if (ec) { self->fail("subscribe", ec.message()); return; }
-                if (self->cbs.on_connected) self->cbs.on_connected(now_ns());
-                self->read();
-            });
-        } else {
-            if (cbs.on_connected) cbs.on_connected(now_ns());
-            read();
-        }
+        send_subscribe(0);
         if (opts.reconnect_before_s) {
+            auto self = shared_from_this();
             timer.expires_after(std::chrono::seconds(opts.reconnect_before_s));
             timer.async_wait([self](beast::error_code ec) { if (!ec && self->connected_) self->fail("lifetime", "planned reconnect before the server's connection limit"); });
         }
+    }
+
+    // Subscribes go out one after another (one write at a time on a Beast stream), then reads start.
+    void send_subscribe(size_t i) {
+        auto self = shared_from_this();
+        if (i < opts.subscribe.size()) {
+            stream->async_write(net::buffer(opts.subscribe[i]), [self, i](beast::error_code ec, size_t) {
+                if (ec) { self->fail("subscribe", ec.message()); return; }
+                self->send_subscribe(i + 1);
+            });
+            return;
+        }
+        if (cbs.on_connected) cbs.on_connected(now_ns());
+        read();
+        if (!opts.ping_text.empty() && opts.ping_every_s) arm_ping();
+    }
+
+    void arm_ping() {
+        auto self = shared_from_this();
+        ping_timer.expires_after(std::chrono::seconds(opts.ping_every_s));
+        ping_timer.async_wait([self](beast::error_code ec) {
+            if (ec || !self->connected_ || !self->stream) return;
+            self->stream->async_write(net::buffer(self->opts.ping_text), [self](beast::error_code ec2, size_t) {
+                if (ec2) { self->fail("ping", ec2.message()); return; }
+                self->arm_ping();
+            });
+        });
     }
 
     void read() {
@@ -126,6 +144,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
         const bool was = connected_;
         connected_ = false;
         timer.cancel();
+        ping_timer.cancel();
         if (stream) { beast::error_code ec; beast::get_lowest_layer(*stream).socket().close(ec); }
         stream.reset();
         if (was && cbs.on_disconnected) cbs.on_disconnected(now_ns(), std::string(where) + ": " + why);
@@ -141,6 +160,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
     void stop() {
         stopping = true;
         timer.cancel();
+        ping_timer.cancel();
         if (stream) { beast::error_code ec; beast::get_lowest_layer(*stream).socket().close(ec); }
     }
 };

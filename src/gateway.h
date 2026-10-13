@@ -1,12 +1,14 @@
 #pragma once
 
 // The network-independent core: raw frames in, canonical messages out. Routes a
-// combined-stream frame to its StreamDef and Instrument, maps flat streams,
-// drives book strategies, assigns the gap-free Sequence, and publishes
-// heartbeats and instrument definitions on a timer. One thread calls everything.
+// frame to its StreamDef and Instrument (by wrapper stream name or by fields),
+// iterates `each` records, maps flat streams, drives book strategies, assigns the
+// gap-free Sequence, and publishes heartbeats and instrument definitions on a
+// timer. One thread calls everything.
 
 #include "book/book.h"
 #include "instruments.h"
+#include "mapper.h"
 #include "pack.h"
 #include "publisher.h"
 #include "recorder.h"
@@ -30,7 +32,7 @@ struct GatewayOptions {
 
 struct GatewayStats {
     uint64_t frames = 0, acks = 0, unmatched_streams = 0, unknown_symbols = 0, parse_errors = 0, map_errors = 0, book_errors = 0;
-    uint64_t published = 0, dropped = 0;
+    uint64_t records = 0, published = 0, dropped = 0;
     uint64_t trades = 0, quotes = 0, book_updates = 0, book_snapshots = 0, heartbeats = 0, definitions = 0, other = 0;
     uint64_t snapshot_requests = 0, snapshots_applied = 0;
 };
@@ -50,8 +52,10 @@ public:
     // Pops one pending snapshot request (strategies that need a snapshot). False when none.
     bool next_snapshot_request(SnapshotRequest& out);
 
+    // Every (stream, instrument) name, e.g. "btcusdt@trade"; the order is stream-major.
     std::vector<std::string> stream_names() const;
-    std::string subscribe_message() const;
+    // The subscribe messages in send order, with the pack's placeholders expanded.
+    std::vector<std::string> subscribe_messages() const;
     const GatewayStats& stats() const noexcept { return stats_; }
     uint64_t sequence() const noexcept { return seq_; }
     uint64_t resyncs() const noexcept;
@@ -63,8 +67,11 @@ private:
     void publish_heartbeat(uint64_t now) noexcept;
     void publish_definitions(uint64_t now) noexcept;
     void publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept;
+    void handle_record(const StreamDef& sd, const Instrument* in, simdjson::ondemand::object& rec, std::string_view kind, uint64_t recv_ts) noexcept;
+    void cache_frame_tokens(const StreamDef& sd, simdjson::ondemand::object& root) noexcept;
     bool prepare(std::string_view json) noexcept; // copies into the padded buffer
     void log_error(const char* what, const std::string& err) noexcept;
+    std::string expand(std::string_view tpl, std::string_view stream_symbol, std::string_view venue_symbol, const StreamDef* sd) const;
 
     const Pack& pack_;
     const Instruments& ins_;
@@ -76,6 +83,8 @@ private:
     std::vector<BookSlot> books_;      // (book stream, instrument) pairs
     std::vector<BookEmit> emits_;
     std::deque<SnapshotRequest> requests_;
+    FrameTokens frame_;                // "$." field tokens of the current frame
+    std::string kind_;                 // the `kind` role value of the current frame, when frame-scope
     GatewayStats stats_;
     uint64_t seq_ = 0, last_heartbeat_ = 0, last_definitions_ = 0;
     uint32_t errors_logged_ = 0;

@@ -1,6 +1,6 @@
 # subplane-feeds: gateways that publish canonical SBE for the subplane agent
 
-One binary, `subplane-gateway`, driven by per-exchange YAML packs (`packs/`). A pack describes the connection, the subscribe template and the JSON path -> canonical field mapping (closed vocabulary: path, type, unit, scale, map). What is genuinely per-exchange (order-book sync protocols, auth, reconnect semantics) is a compiled-in strategy selected by name in the pack. Gateways publish one canonical SBE message per Aeron offer with one gap-free `Sequence`; the agent (`subplaned`, repo `subplane`) ingests it as an ordinary `aeron` partition.
+One binary, `subplane-gateway`, driven by per-exchange YAML packs (`packs/`). A pack describes the connection, the subscribe templates, how frames route (wrapper stream name or type/symbol fields, `each` for several records per frame) and the JSON path -> canonical field mapping (`path@conversion`, conversions named in `packs/registry.yaml`; models are the canonical schema itself). What is genuinely per-exchange (order-book sync protocols, auth, reconnect semantics) is a compiled-in strategy selected by name in the pack. Gateways publish one canonical SBE message per Aeron offer with one gap-free `Sequence`; the agent (`subplaned`, repo `subplane`) ingests it as an ordinary `aeron` partition.
 
 ## Contract with the agent
 Only `contract/subplane_canonical.xml` (schema id 100) and its generated header, copied from the agent repo. No shared library. The agent never depends on this repo.

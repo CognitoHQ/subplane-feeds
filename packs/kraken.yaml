@@ -1,44 +1,37 @@
 # Kraken spot, WebSocket v2. Frames: {"channel": ..., "type": "snapshot"|"update", "data": [ {...}, ... ]}.
-# Numbers are JSON numbers, timestamps RFC3339, several records per frame.
+# Numbers are JSON numbers, timestamps RFC 3339, several records per frame, the symbol inside each record.
 exchange: kraken
 venue_id: 30
 connect:
   url: wss://ws.kraken.com/v2
-  route: { type: channel, symbol: data.0.symbol }
-  subscribe:                                                      # one subscribe message per channel
+  route: { type: channel, symbol: symbol }          # symbol resolves per record (each: data)
+  subscribe:                                        # one subscribe message per channel
     - { method: subscribe, params: { channel: trade, symbol: "{symbols}" } }
     - { method: subscribe, params: { channel: ticker, symbol: "{symbols}" } }
     - { method: subscribe, params: { channel: book, symbol: "{symbols}", depth: 25 } }
-  symbol_case: upper                                              # BTC/USD
+  symbol_case: upper                                # BTC/USD
 streams:
   - name: "{symbol}@trade"
     match: trade
-    each: data                                                    # one Trade per element of the data array
+    each: data                                      # one Trade per element of the data array
     message: Trade
     fields:
-      ExchangeTs: { path: timestamp, type: iso8601 }
-      Price:      { path: price, type: decimal }                  # JSON number, not a string
-      Qty:        { path: qty, type: decimal }
-      TradeId:    { path: trade_id }
-      Aggressor:  { path: side, map: { buy: Buy, sell: Sell } }
+      ExchangeTs: timestamp@iso8601
+      Price:      price                             # JSON number, not a string
+      Qty:        qty
+      TradeId:    trade_id
+      Aggressor:  side@side
   - name: "{symbol}@ticker"
     match: ticker
     each: data
     message: Quote
-    fields:
-      BidPx:  { path: bid, type: decimal }
-      BidQty: { path: bid_qty, type: decimal }
-      AskPx:  { path: ask, type: decimal }
-      AskQty: { path: ask_qty, type: decimal }
+    fields: { BidPx: bid, BidQty: bid_qty, AskPx: ask, AskQty: ask_qty }
   - name: "{symbol}@book"
     match: book
     each: data
-    book: l2_inband_checksum                                      # snapshot then updates, CRC32 of the top ten
+    book: l2_inband                                 # snapshot then updates; the CRC32 checksum is not verified yet
     fields:
-      kind: { path: type }                                        # hmm: "type" is on the frame, not inside data
-      bids: bids                                                  # [{price, qty}] objects, not pairs
-      asks: asks
-      level_price: price
-      level_qty: qty
-      checksum: checksum
-      ExchangeTs: { path: timestamp, type: iso8601 }
+      kind: $.type                                  # snapshot | update, on the frame
+      bids: bids@objects                            # [{price, qty}]
+      asks: asks@objects
+      ExchangeTs: timestamp@iso8601                 # updates only
