@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gateway (replaying the fixture) -> Aeron IPC (embedded driver in the agent) -> subplaned -> ring -> views_app.
-# usage: agent_e2e.sh <subplane-gateway> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml>
+# usage: agent_e2e.sh <spwsgw> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml>
 # Skipped (77) without an agent build directory.
 set -u
 GW=$1; AGENT_DIR=$2; PACK=$3; DIR=$4; SCHEMA=$5

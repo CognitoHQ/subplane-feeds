@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Recorded frames -> pack -> stdout must equal the expected text byte for byte.
-# usage: fixture_test.sh <subplane-gateway> <pack.yaml> <fixture dir>
+# usage: fixture_test.sh <spwsgw> <pack.yaml> <fixture dir>
 set -u
 GW=$1; PACK=$2; DIR=$3
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

@@ -45,7 +45,7 @@ struct Get : std::enable_shared_from_this<Get> {
         req.method(http::verb::get);
         req.target(target);
         req.set(http::field::host, host);
-        req.set(http::field::user_agent, "subplane-gateway");
+        req.set(http::field::user_agent, "spwsgw");
         auto self = shared_from_this();
         resolver.async_resolve(host, port, [self](beast::error_code ec, tcp::resolver::results_type results) {
             if (ec) { self->done(0, "resolve: " + ec.message()); return; }

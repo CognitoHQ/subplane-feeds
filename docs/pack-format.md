@@ -4,7 +4,7 @@ A pack is one YAML file per exchange (`packs/<exchange>.yaml`). It is loaded onc
 
 ## Models and the registry
 
-The models are the canonical schema itself: `subplane-gateway models` lists every message with its fields and kinds. A pack names a field and gives it a path; the conversion follows from the field's kind (decimal fields parse a decimal string or number into int64 at 1e-9, exact; unsigned fields parse integers; char fields take strings). A pack names a conversion only when the wire needs one, as `path@name`:
+The models are the canonical schema itself: `spwsgw models` lists every message with its fields and kinds. A pack names a field and gives it a path; the conversion follows from the field's kind (decimal fields parse a decimal string or number into int64 at 1e-9, exact; unsigned fields parse integers; char fields take strings). A pack names a conversion only when the wire needs one, as `path@name`:
 
 ```yaml
 ExchangeTs: T@ms                       # a time format

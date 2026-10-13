@@ -1,10 +1,10 @@
-// subplane-gateway: one exchange connection per box, canonical SBE out over Aeron.
+// spwsgw: one exchange connection per box, canonical SBE out over Aeron.
 //
-//   subplane-gateway --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
+//   spwsgw --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
 //                    [--registry packs/registry.yaml] [--out aeron|stdout] [--channel aeron:ipc] [--stream-id 1001]
 //                    [--aeron-dir D] [--embedded-driver] [--record frames.jsonl] [--replay frames.jsonl]
 //                    [--snapshot-every 100] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
-//   subplane-gateway models        # the canonical messages and fields a pack can target
+//   spwsgw models        # the canonical messages and fields a pack can target
 
 #include "gateway.h"
 #include "replayer.h"
@@ -35,10 +35,10 @@ void on_signal(int) { g_stop = 1; }
 [[maybe_unused]] uint64_t now_ns() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); }
 
 void usage() {
-    std::fputs("usage: subplane-gateway --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout] [--channel C]\n"
+    std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout] [--channel C]\n"
                "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--quiet]\n"
-               "       subplane-gateway models\n", stderr);
+               "       spwsgw models\n", stderr);
 }
 
 std::vector<std::string> split(const std::string& s, char sep) {
@@ -90,11 +90,11 @@ int main(int argc, char** argv) {
     const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe"};
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
-        if (k.rfind("--", 0) != 0) { std::fprintf(stderr, "subplane-gateway: unexpected argument %s\n", argv[i]); usage(); return 2; }
+        if (k.rfind("--", 0) != 0) { std::fprintf(stderr, "spwsgw: unexpected argument %s\n", argv[i]); usage(); return 2; }
         k = k.substr(2);
         if (boolean.count(k)) { flags.insert(k); continue; }
-        if (!valued.count(k)) { std::fprintf(stderr, "subplane-gateway: unknown option --%s\n", k.c_str()); usage(); return 2; }
-        if (i + 1 >= argc) { std::fprintf(stderr, "subplane-gateway: --%s needs a value\n", k.c_str()); return 2; }
+        if (!valued.count(k)) { std::fprintf(stderr, "spwsgw: unknown option --%s\n", k.c_str()); usage(); return 2; }
+        if (i + 1 >= argc) { std::fprintf(stderr, "spwsgw: --%s needs a value\n", k.c_str()); return 2; }
         a[k] = argv[++i];
     }
     if (flags.count("help")) { usage(); return 0; }
@@ -104,16 +104,16 @@ int main(int argc, char** argv) {
 
     std::string err;
     Pack pack;
-    if (!a.count("pack")) { std::fputs("subplane-gateway: --pack is required\n", stderr); usage(); return 2; }
-    if (!Pack::load_with_registry(a["pack"], get("registry", ""), pack, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 2; }
+    if (!a.count("pack")) { std::fputs("spwsgw: --pack is required\n", stderr); usage(); return 2; }
+    if (!Pack::load_with_registry(a["pack"], get("registry", ""), pack, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 2; }
 
     Instruments instruments;
     if (a.count("instruments")) {
-        if (!instruments.load_file(a["instruments"], pack.connect.symbol_lower, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 2; }
+        if (!instruments.load_file(a["instruments"], pack.connect.symbol_lower, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 2; }
     } else if (a.count("symbols")) {
-        if (!instruments.load_symbols(split(a["symbols"], ','), pack.connect.symbol_lower, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 2; }
-        if (!quiet) std::fputs("subplane-gateway: --symbols assigns ids 1..n in order; use --instruments for stable ids\n", stderr);
-    } else { std::fputs("subplane-gateway: --instruments or --symbols is required\n", stderr); usage(); return 2; }
+        if (!instruments.load_symbols(split(a["symbols"], ','), pack.connect.symbol_lower, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 2; }
+        if (!quiet) std::fputs("spwsgw: --symbols assigns ids 1..n in order; use --instruments for stable ids\n", stderr);
+    } else { std::fputs("spwsgw: --instruments or --symbols is required\n", stderr); usage(); return 2; }
 
     GatewayOptions opts;
     opts.heartbeat_ms = getu("heartbeat-ms", 1000);
@@ -135,30 +135,30 @@ int main(int argc, char** argv) {
         ac.aeron_dir = get("aeron-dir", "");
         ac.embedded_driver = flags.count("embedded-driver") != 0;
         owned = make_aeron_publisher(ac, err);
-        if (!owned) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 1; }
+        if (!owned) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 1; }
         pub = owned.get();
 #else
-        std::fputs("subplane-gateway: built without Aeron; use --out stdout\n", stderr); return 2;
+        std::fputs("spwsgw: built without Aeron; use --out stdout\n", stderr); return 2;
 #endif
-    } else { std::fprintf(stderr, "subplane-gateway: --out must be aeron or stdout\n"); return 2; }
+    } else { std::fprintf(stderr, "spwsgw: --out must be aeron or stdout\n"); return 2; }
 
     Recorder recorder;
     Recorder* rec = nullptr;
     if (a.count("record")) {
-        if (!recorder.open(a["record"], err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 1; }
+        if (!recorder.open(a["record"], err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 1; }
         rec = &recorder;
     }
 
     Gateway gw(pack, instruments, *pub, opts, rec);
     if (flags.count("subscribe")) { for (const auto& m : gw.subscribe_messages()) std::printf("%s\n", m.c_str()); return 0; }
-    if (!quiet) std::fprintf(stderr, "subplane-gateway: %s, %zu instruments, %zu streams -> %s\n", pack.exchange.c_str(), instruments.all().size(), gw.stream_names().size(), pub->describe().c_str());
+    if (!quiet) std::fprintf(stderr, "spwsgw: %s, %zu instruments, %zu streams -> %s\n", pack.exchange.c_str(), instruments.all().size(), gw.stream_names().size(), pub->describe().c_str());
 
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
     if (a.count("replay")) {
         ReplayStats rs;
-        if (!replay_file(a["replay"], gw, rs, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return 1; }
+        if (!replay_file(a["replay"], gw, rs, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 1; }
         if (!quiet) std::fprintf(stderr, "replayed frames=%llu snapshots=%llu events=%llu bad_lines=%llu\n", (unsigned long long)rs.frames, (unsigned long long)rs.snapshots, (unsigned long long)rs.events, (unsigned long long)rs.bad_lines);
         print_stats(gw, stderr);
         pub->close();
@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
     wo.reconnect_before_s = pack.connect.reconnect_before_s;
     WsCallbacks cbs;
     cbs.on_frame = [&](std::string_view f, uint64_t ts) { gw.on_frame(f, ts); };
-    cbs.on_connected = [&](uint64_t ts) { if (!quiet) std::fputs("subplane-gateway: connected and subscribed\n", stderr); gw.on_connected(ts); };
+    cbs.on_connected = [&](uint64_t ts) { if (!quiet) std::fputs("spwsgw: connected and subscribed\n", stderr); gw.on_connected(ts); };
     cbs.on_disconnected = [&](uint64_t ts, const std::string&) { gw.on_disconnected(ts); };
     WsClient client(io, wo, cbs);
     client.start();
@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
                 const std::string sym = rq.venue_symbol;
                 https_get(io, rq.url, [&, sym](int status, std::string body) {
                     if (status == 200) gw.on_snapshot(sym, body, now_ns());
-                    else std::fprintf(stderr, "subplane-gateway: snapshot %s failed: %d %s\n", sym.c_str(), status, status == 0 ? body.c_str() : "");
+                    else std::fprintf(stderr, "spwsgw: snapshot %s failed: %d %s\n", sym.c_str(), status, status == 0 ? body.c_str() : "");
                 });
             }
             if (!quiet && now - last_report >= 60'000'000'000ull) { print_stats(gw, stderr); last_report = now; }
@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
     pub->close();
     return 0;
 #else
-    std::fputs("subplane-gateway: built without the network client (FEEDS_WITH_NETWORK=OFF); only --replay works\n", stderr);
+    std::fputs("spwsgw: built without the network client (FEEDS_WITH_NETWORK=OFF); only --replay works\n", stderr);
     return 2;
 #endif
 }

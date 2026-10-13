@@ -60,7 +60,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
 
     void start() {
         std::string err;
-        if (!parse_url(opts.url, url, err)) { std::fprintf(stderr, "subplane-gateway: %s\n", err.c_str()); return; }
+        if (!parse_url(opts.url, url, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return; }
         connect();
     }
 
@@ -80,7 +80,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
                     // INTENT: no idle timeout and Beast answers pings itself; Binance pings every
                     // three minutes and closes the connection if no pong arrives.
                     self->stream->set_option(ws::stream_base::timeout::suggested(beast::role_type::client));
-                    self->stream->set_option(ws::stream_base::decorator([](ws::request_type& req) { req.set(beast::http::field::user_agent, "subplane-gateway"); }));
+                    self->stream->set_option(ws::stream_base::decorator([](ws::request_type& req) { req.set(beast::http::field::user_agent, "spwsgw"); }));
                     self->stream->async_handshake(self->url.host, self->url.target, [self](beast::error_code ec4) {
                         if (ec4) { self->fail("websocket handshake", ec4.message()); return; }
                         self->on_open();
@@ -149,7 +149,7 @@ struct WsClient::Impl : std::enable_shared_from_this<WsClient::Impl> {
         stream.reset();
         if (was && cbs.on_disconnected) cbs.on_disconnected(now_ns(), std::string(where) + ": " + why);
         if (stopping) return;
-        std::fprintf(stderr, "subplane-gateway: %s: %s; reconnecting in %llu ms\n", where, why.c_str(), static_cast<unsigned long long>(backoff_ms));
+        std::fprintf(stderr, "spwsgw: %s: %s; reconnecting in %llu ms\n", where, why.c_str(), static_cast<unsigned long long>(backoff_ms));
         ++reconnects;
         auto self = shared_from_this();
         timer.expires_after(std::chrono::milliseconds(backoff_ms));

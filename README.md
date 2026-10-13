@@ -1,9 +1,9 @@
 # subplane-feeds
 
-Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/satyan-g/subplane) agent. One `subplane-gateway` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
+Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/satyan-g/subplane) agent. One `spwsgw` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
 
 ```
-Binance (wss) -> subplane-gateway --pack packs/binance-spot.yaml -> Aeron -> subplaned -> shared-memory ring -> apps
+Binance (wss) -> spwsgw --pack packs/binance-spot.yaml -> Aeron -> subplaned -> shared-memory ring -> apps
 ```
 
 ## Why
@@ -17,10 +17,10 @@ sudo apt install libboost-dev libssl-dev libyaml-cpp-dev   # CMake 3.30+ (see sc
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 
 # Dry run against Binance, canonical messages as text:
-build/subplane-gateway --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
+build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
 
 # For real: Aeron IPC into an agent whose partition is `transport: {type: aeron, channel: "aeron:ipc", stream_id: 1001}`
-build/subplane-gateway --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
+build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
 ```
 
 `--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
@@ -47,7 +47,7 @@ streams:
     snapshot: { url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
 ```
 
-The models are the canonical schema (`subplane-gateway models` lists them); conversions default from each field's kind and the named ones (time formats, enum maps, level layouts) live in `packs/registry.yaml`, so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
+The models are the canonical schema (`spwsgw models` lists them); conversions default from each field's kind and the named ones (time formats, enum maps, level layouts) live in `packs/registry.yaml`, so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
 
 ## Contract with the agent
 

@@ -105,7 +105,7 @@ uint64_t Gateway::resyncs() const noexcept {
 void Gateway::log_error(const char* what, const std::string& err) noexcept {
     if (!opts_.log_errors || errors_logged_ >= 20) return;
     ++errors_logged_;
-    std::fprintf(stderr, "subplane-gateway: %s: %s%s\n", what, err.c_str(), errors_logged_ == 20 ? " (further errors not logged)" : "");
+    std::fprintf(stderr, "spwsgw: %s: %s%s\n", what, err.c_str(), errors_logged_ == 20 ? " (further errors not logged)" : "");
 }
 
 void Gateway::publish(uint8_t* msg, size_t len, uint64_t& counter) noexcept {

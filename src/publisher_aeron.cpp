@@ -28,7 +28,7 @@ public:
         if (aeron_context_init(&ctx_) < 0) return fail("context", err);
         if (!cfg_.aeron_dir.empty() && aeron_context_set_dir(ctx_, cfg_.aeron_dir.c_str()) < 0) return fail("dir", err);
         aeron_context_set_driver_timeout_ms(ctx_, cfg_.driver_timeout_ms);
-        aeron_context_set_client_name(ctx_, "subplane-gateway");
+        aeron_context_set_client_name(ctx_, "spwsgw");
         if (aeron_init(&client_, ctx_) < 0) return fail("init (is the media driver running?)", err);
         if (aeron_start(client_) < 0) return fail("start", err);
         aeron_async_add_exclusive_publication_t* async = nullptr;

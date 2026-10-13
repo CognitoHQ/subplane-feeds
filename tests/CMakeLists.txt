@@ -15,10 +15,10 @@ foreach(dir ${FEEDS_FIXTURES})
     string(REPLACE "-" "_" tname ${name})
     set(pack ${CMAKE_SOURCE_DIR}/packs/${name}.yaml)
     add_test(NAME fixture_${tname}
-        COMMAND ${CMAKE_SOURCE_DIR}/tests/fixture_test.sh $<TARGET_FILE:subplane-gateway> ${pack} ${dir})
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/fixture_test.sh $<TARGET_FILE:spwsgw> ${pack} ${dir})
     # Gateway (replay) -> Aeron IPC -> subplaned -> ring -> views_app, when an agent build is given.
     add_test(NAME agent_e2e_${tname}
-        COMMAND ${CMAKE_SOURCE_DIR}/tests/agent_e2e.sh $<TARGET_FILE:subplane-gateway> "${SUBPLANE_BUILD_DIR}"
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/agent_e2e.sh $<TARGET_FILE:spwsgw> "${SUBPLANE_BUILD_DIR}"
                 ${pack} ${dir} ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml)
     set_tests_properties(agent_e2e_${tname} PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()

@@ -1,5 +1,5 @@
 # Named pieces that packs share. Models and fields are the canonical schema itself
-# (`subplane-gateway models` lists them); conversions default from each field's kind.
+# (`spwsgw models` lists them); conversions default from each field's kind.
 # A pack references these as `path@name`, e.g. `ExchangeTs: T@ms`, `Aggressor: m@taker_from_maker_bool`.
 times:
   # built in: s, ms, us, ns, iso8601
