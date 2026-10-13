@@ -68,7 +68,7 @@ TEST_CASE("book stream: snapshot request, snapshot, diffs") {
     gw.tick(1);
     SnapshotRequest rq;
     REQUIRE(gw.next_snapshot_request(rq));
-    CHECK(rq.venue_symbol == "BTCUSDT"); CHECK(rq.url == "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=1000");
+    CHECK(rq.venue_symbol == "BTCUSDT"); CHECK(rq.url == "https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=1000");
     REQUIRE(gw.next_snapshot_request(rq)); CHECK(rq.venue_symbol == "ETHUSDT");
     CHECK_FALSE(gw.next_snapshot_request(rq));
     gw.on_frame(R"({"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["0.0024","10"]],"a":[["0.0026","100"]]}})", 10);

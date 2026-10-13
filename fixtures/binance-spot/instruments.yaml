@@ -1,0 +1,2 @@
+instruments:
+  BTCUSDT: { id: 1, base: BTC, quote: USDT }

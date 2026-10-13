@@ -5,7 +5,7 @@ target_compile_definitions(feeds_test PRIVATE
 add_test(NAME feeds_test COMMAND feeds_test)
 
 # Recorded Binance frames through the pack: output must match the expected text exactly.
-if(EXISTS ${CMAKE_SOURCE_DIR}/fixtures/binance-spot/btcusdt.jsonl)
+if(EXISTS ${CMAKE_SOURCE_DIR}/fixtures/binance-spot/frames.jsonl)
     add_test(NAME fixture_binance_spot
         COMMAND ${CMAKE_SOURCE_DIR}/tests/fixture_test.sh $<TARGET_FILE:subplane-gateway>
                 ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot)

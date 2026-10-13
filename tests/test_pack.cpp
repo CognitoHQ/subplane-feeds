@@ -9,7 +9,7 @@ const char* kGood = R"(
 exchange: binance-spot
 venue_id: 10
 connect:
-  url: wss://stream.binance.com:9443/stream
+  url: wss://data-stream.binance.vision/stream
   subscribe: { method: SUBSCRIBE, params: "{streams}", id: 1 }
 streams:
   - name: "{symbol}@trade"
@@ -22,7 +22,7 @@ streams:
     book: binance_diff
     fields: { first_id: U, last_id: u, bids: b, asks: a, ExchangeTs: { path: E, unit: ms } }
     snapshot:
-      url: "https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit=1000"
+      url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000"
       fields: { last_id: lastUpdateId, bids: bids, asks: asks }
 )";
 }
@@ -49,7 +49,7 @@ TEST_CASE("pack fields resolve to canonical fields with their conversions") {
     CHECK(t.fields[2].map.at("true") == "Sell");
     CHECK(p.streams[1].book == "binance_diff");
     CHECK(p.streams[1].has_snapshot);
-    CHECK(expand_symbol(p.streams[1].snapshot.url_tpl, "btcusdt", "BTCUSDT") == "https://api.binance.com/api/v3/depth?symbol=BTCUSDT&limit=1000");
+    CHECK(expand_symbol(p.streams[1].snapshot.url_tpl, "btcusdt", "BTCUSDT") == "https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=1000");
     CHECK(expand_symbol(t.name_tpl, "btcusdt", "BTCUSDT") == "btcusdt@trade");
 }
 

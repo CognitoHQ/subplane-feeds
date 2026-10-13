@@ -31,7 +31,7 @@ build/subplane-gateway --pack packs/binance-spot.yaml --instruments site/instrum
 exchange: binance-spot
 venue_id: 10
 connect:
-  url: wss://stream.binance.com:9443/stream
+  url: wss://data-stream.binance.vision/stream
   subscribe: { method: SUBSCRIBE, params: "{streams}", id: 1 }
 streams:
   - name: "{symbol}@trade"
@@ -43,7 +43,7 @@ streams:
   - name: "{symbol}@depth@100ms"
     book: binance_diff                            # a compiled-in strategy for what YAML cannot say
     fields: { first_id: U, last_id: u, bids: b, asks: a }
-    snapshot: { url: "https://api.binance.com/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
+    snapshot: { url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
 ```
 
 The mapping vocabulary is closed on purpose: `path`, `type`, `unit`, `scale`, `map`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
