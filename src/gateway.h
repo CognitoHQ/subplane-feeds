@@ -7,7 +7,7 @@
 // timer. One thread calls everything.
 
 #include "book/book.h"
-#include "counter.h"
+#include "one_writer.h"
 #include "instruments.h"
 #include "latency.h"
 #include "mapper.h"
@@ -33,19 +33,19 @@ struct GatewayOptions {
     bool     log_errors = true;      // first few mapping errors to stderr
 };
 
-// Written by the gateway thread only; readable from any thread (counter.h), which
+// Written by the gateway thread only; readable from any thread (one_writer.h), which
 // is what lets /metrics run on its own thread.
 struct GatewayStats {
-    Counter frames, acks, unmatched_streams, unknown_symbols, parse_errors, map_errors, book_errors;
-    Counter records, published, offers, offer_bytes;
+    OneWriter frames, acks, unmatched_streams, unknown_symbols, parse_errors, map_errors, book_errors;
+    OneWriter records, published, offers, offer_bytes;
     // Messages not delivered, by the publisher's reason (Offer); `dropped` is their sum.
-    Counter dropped, dropped_back_pressured, dropped_not_connected, dropped_failed;
-    Counter trades, quotes, book_updates, book_snapshots, heartbeats, definitions, other;
-    Counter snapshot_requests, snapshots_applied;
-    Counter connects, disconnects;   // exchange connection (on_connected / on_disconnected)
-    Counter connected;               // 1 between on_connected and on_disconnected
-    Counter last_sequence;           // the last Sequence offered
-    Counter resyncs;                 // sum over book strategies, refreshed by tick()
+    OneWriter dropped, dropped_back_pressured, dropped_not_connected, dropped_failed;
+    OneWriter trades, quotes, book_updates, book_snapshots, heartbeats, definitions, other;
+    OneWriter snapshot_requests, snapshots_applied;
+    OneWriter connects, disconnects;   // exchange connection (on_connected / on_disconnected)
+    OneWriter connected;               // 1 between on_connected and on_disconnected
+    OneWriter last_sequence;           // the last Sequence offered
+    OneWriter resyncs;                 // sum over book strategies, refreshed by tick()
 };
 
 class Gateway {
@@ -78,7 +78,7 @@ public:
 private:
     struct BookSlot { std::unique_ptr<BookStrategy> strategy; const StreamDef* sd; const Instrument* ins; };
 
-    void publish(uint8_t* msg, size_t len, Counter& counter) noexcept;   // appends to the current batch
+    void publish(uint8_t* msg, size_t len, OneWriter& counter) noexcept;   // appends to the current batch
     void offer(const uint8_t* msg, size_t len, uint64_t messages) noexcept;
     void flush() noexcept;                                                   // one offer for everything appended since the last flush
     void publish_heartbeat(uint64_t now) noexcept;

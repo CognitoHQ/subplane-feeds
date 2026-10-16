@@ -4,7 +4,7 @@
 // Prometheus text or JSON, /topology, /health. Cold; called on the HTTP thread.
 //
 // INTENT: everything read here is safe while the gateway thread runs: the
-// stats are one-writer Counters, the histograms are relaxed atomics, the pack
+// stats are one-writer OneWriter values, the histograms are relaxed atomics, the pack
 // and instruments are immutable after startup, and Publisher::connected() and
 // endpoint_key() are documented thread-safe. Reading anything else of the
 // Gateway (its books, its sequence) from here would be a data race.

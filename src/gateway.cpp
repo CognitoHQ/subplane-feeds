@@ -114,7 +114,7 @@ void Gateway::log_error(const char* what, const std::string& err) noexcept {
 // produced; it is offered when that unit ends, or earlier when the next message
 // would not fit. So the last message of a frame leaves at the same moment it would
 // have without batching, and the Aeron frame header is paid once per batch.
-void Gateway::publish(uint8_t* msg, size_t len, Counter& counter) noexcept {
+void Gateway::publish(uint8_t* msg, size_t len, OneWriter& counter) noexcept {
     const uint64_t seq = ++seq_;
     std::memcpy(msg + kPrefixSequence, &seq, 8);
     ++counter;
@@ -279,7 +279,7 @@ void Gateway::handle_record(const StreamDef& sd, const Instrument* in, simdjson:
         uint8_t buf[512];
         begin_message(buf, *sd.msg, in->id, pack_.venue_id, 0, recv_ts);
         if (!Mapper::map_flat(sd, rec, sd.has_each ? &frame_ : nullptr, buf, err)) { ++stats_.map_errors; log_error(sd.message.c_str(), err); return; }
-        Counter* counter = &stats_.other;
+        OneWriter* counter = &stats_.other;
         if (sd.msg->template_id == sp_canonical::Trade::kTemplateId) counter = &stats_.trades;
         else if (sd.msg->template_id == sp_canonical::Quote::kTemplateId) counter = &stats_.quotes;
         publish(buf, sd.msg->size, *counter);
