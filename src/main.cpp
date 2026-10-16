@@ -4,9 +4,11 @@
 //                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001]
 //                    [--aeron-dir D] [--embedded-driver] [--record frames.jsonl] [--replay frames.jsonl]
 //                    [--snapshot-every 100] [--batch-bytes 1376] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
+//                    [--http 127.0.0.1:9101] [--instance NAME] [--site S] [--env E] [--labels k=v,...]
 //   spwsgw models        # the canonical messages and fields a pack can target
 
 #include "gateway.h"
+#include "obs/observe.h"
 #include "replayer.h"
 #if FEEDS_WITH_NETWORK
 #include "net.h"
@@ -18,9 +20,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <map>
 #include <set>
+#include <thread>
+#include <unistd.h>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -38,6 +43,7 @@ void usage() {
     std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
                "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--spin] [--quiet]\n"
+               "                        [--http HOST:PORT] [--instance NAME] [--site S] [--env E] [--labels k=v,...]\n"
                "       spwsgw models\n", stderr);
 }
 
@@ -92,7 +98,8 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> a;
     std::set<std::string> flags;
     const std::set<std::string> valued = {"pack", "registry", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
-                                          "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds"};
+                                          "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds",
+                                          "http", "instance", "site", "env", "labels"};
     const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe", "spin"};
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
@@ -166,11 +173,68 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
 
-    if (a.count("replay")) {
+    Identity id;
+    {
+        char host[256] = {};
+        id.host = ::gethostname(host, sizeof host - 1) == 0 ? host : "unknown";
+    }
+    id.instance = get("instance", pack.exchange);
+    id.version = FEEDS_VERSION;
+    id.site = get("site", "");
+    id.env = get("env", "");
+    id.epoch = now_ns();
+    id.pid = static_cast<int32_t>(::getpid());
+    for (const auto& kv : split(get("labels", ""), ',')) {
+        const size_t eq = kv.find('=');
+        const std::string k = kv.substr(0, eq);
+        if (eq == std::string::npos || !Observer::valid_label_name(k)) { std::fprintf(stderr, "spwsgw: --labels: invalid label '%s' (want name=value)\n", kv.c_str()); return 2; }
+        id.labels.emplace_back(k, kv.substr(eq + 1));
+    }
+    const bool replaying = a.count("replay") != 0;
+    const std::string upstream = replaying ? "file://" + std::filesystem::absolute(a["replay"]).lexically_normal().string() : pack.connect.url;
+    const Observer observer(gw, pack, instruments, *pub, id, upstream, !replaying);
+#if FEEDS_WITH_NETWORK
+    HttpServer http;
+    if (a.count("http")) {
+        auto handler = [&observer](const std::string& target) {
+            HttpReply r;
+            const std::string path = target.substr(0, target.find('?'));
+            const std::string query = target.find('?') == std::string::npos ? "" : target.substr(target.find('?') + 1);
+            if (path == "/metrics" && query.find("format=json") != std::string::npos) {
+                r.content_type = "application/json"; r.body = observer.metrics_json();
+            } else if (path == "/metrics") {
+                r.content_type = "text/plain; version=0.0.4; charset=utf-8"; r.body = observer.metrics_text();
+            } else if (path == "/topology") {
+                r.content_type = "application/json"; r.body = observer.topology_json();
+            } else if (path == "/health") {
+                std::string why;
+                if (observer.healthy(why)) r.body = "ok\n";
+                else { r.status = 503; r.body = why + "\n"; }
+            } else {
+                r.status = 404; r.body = "routes: /metrics /metrics?format=json /topology /health\n";
+            }
+            return r;
+        };
+        if (!http.start(a["http"], handler, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 2; }
+        if (!quiet) std::fprintf(stderr, "spwsgw: http on port %u\n", unsigned(http.port()));
+    }
+#else
+    if (a.count("http")) { std::fputs("spwsgw: built without the network client; --http is unavailable\n", stderr); return 2; }
+#endif
+
+    if (replaying) {
         ReplayStats rs;
         if (!replay_file(a["replay"], gw, rs, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 1; }
         if (!quiet) std::fprintf(stderr, "replayed frames=%llu snapshots=%llu events=%llu bad_lines=%llu\n", (unsigned long long)rs.frames, (unsigned long long)rs.snapshots, (unsigned long long)rs.events, (unsigned long long)rs.bad_lines);
         print_stats(gw, stderr);
+#if FEEDS_WITH_NETWORK
+        if (a.count("http")) {
+            // Keep serving the final numbers, for tests and for inspecting a replay, until --seconds or a signal.
+            const uint64_t until = now_ns() + getu("seconds", 0) * 1'000'000'000ull;
+            while (!g_stop && (!a.count("seconds") || now_ns() < until)) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            http.stop();
+        }
+#endif
         pub->close();
         return rs.bad_lines ? 1 : 0;
     }
@@ -225,6 +289,7 @@ int main(int argc, char** argv) {
         io.run();
     }
     print_stats(gw, stderr);
+    http.stop();   // INTENT: before close(): the handler reads the publication's connected state
     pub->close();
     return 0;
 #else

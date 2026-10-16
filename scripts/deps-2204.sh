@@ -4,7 +4,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
-apt-get install -y -qq g++ pkg-config libyaml-cpp-dev libboost-dev libssl-dev git ca-certificates gpg wget uuid-dev >/dev/null
+apt-get install -y -qq g++ pkg-config libyaml-cpp-dev libboost-dev libssl-dev git ca-certificates gpg wget uuid-dev curl >/dev/null
 wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg
 echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' > /etc/apt/sources.list.d/kitware.list
 apt-get update -qq >/dev/null

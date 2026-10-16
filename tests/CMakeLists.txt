@@ -1,4 +1,4 @@
-add_executable(feeds_test test_main.cpp test_decimal.cpp test_json_path.cpp test_pack.cpp test_book.cpp test_gateway.cpp test_contract.cpp)
+add_executable(feeds_test test_main.cpp test_decimal.cpp test_json_path.cpp test_pack.cpp test_book.cpp test_gateway.cpp test_contract.cpp test_observe.cpp)
 target_link_libraries(feeds_test PRIVATE feeds_core feeds_warnings doctest)
 target_compile_definitions(feeds_test PRIVATE
     FEEDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -22,3 +22,11 @@ foreach(dir ${FEEDS_FIXTURES})
                 ${pack} ${dir} ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml)
     set_tests_properties(agent_e2e_${tname} PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()
+
+# The observability HTTP routes (needs the network build for the server).
+if(FEEDS_WITH_NETWORK)
+    add_test(NAME http_observability
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/http_test.sh $<TARGET_FILE:spwsgw>
+                ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot)
+    set_tests_properties(http_observability PROPERTIES SKIP_RETURN_CODE 77)
+endif()

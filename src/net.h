@@ -44,6 +44,25 @@ private:
     std::shared_ptr<Impl> impl_;
 };
 
+// The observability HTTP server (docs/observability.md): its own thread and
+// io_context, never the gateway's, so --spin and the data path are untouched.
+// One request per connection (Connection: close), GET only, 5 s to send it.
+struct HttpReply { int status = 200; std::string content_type = "text/plain; charset=utf-8"; std::string body; };
+class HttpServer {
+public:
+    // `target` is the request target ("/metrics?format=json"). Called on the server thread.
+    using Handler = std::function<HttpReply(const std::string& target)>;
+    HttpServer();
+    ~HttpServer();
+    // "host:port" (port 0 picks one); false with `err` if it cannot bind.
+    bool start(const std::string& listen, Handler handler, std::string& err);
+    void stop();                        // joins the thread; no handler runs after it returns
+    uint16_t port() const noexcept;     // the bound port
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
 // HTTPS GET; `done(status, body)` on the io_context. status 0 = transport error, body = message.
 void https_get(boost::asio::io_context& io, const std::string& url, std::function<void(int status, std::string body)> done);
 

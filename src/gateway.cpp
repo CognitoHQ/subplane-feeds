@@ -114,25 +114,31 @@ void Gateway::log_error(const char* what, const std::string& err) noexcept {
 // produced; it is offered when that unit ends, or earlier when the next message
 // would not fit. So the last message of a frame leaves at the same moment it would
 // have without batching, and the Aeron frame header is paid once per batch.
-void Gateway::publish(uint8_t* msg, size_t len, uint64_t& counter) noexcept {
+void Gateway::publish(uint8_t* msg, size_t len, Counter& counter) noexcept {
     const uint64_t seq = ++seq_;
     std::memcpy(msg + kPrefixSequence, &seq, 8);
     ++counter;
-    if (opts_.batch_bytes == 0) {
-        ++stats_.offers; stats_.offer_bytes += len;
-        if (pub_.publish(msg, len)) ++stats_.published; else ++stats_.dropped;
-        return;
-    }
+    if (opts_.batch_bytes == 0) { offer(msg, len, 1); return; }
     if (!batch_.empty() && batch_.size() + len > opts_.batch_bytes) flush();
     batch_.insert(batch_.end(), msg, msg + len);
     ++pending_;
 }
 
+void Gateway::offer(const uint8_t* msg, size_t len, uint64_t messages) noexcept {
+    ++stats_.offers; stats_.offer_bytes += len;
+    stats_.last_sequence.set(seq_);
+    switch (pub_.publish(msg, len)) {
+    case Offer::OK: stats_.published += messages; return;
+    case Offer::BACK_PRESSURED: stats_.dropped_back_pressured += messages; break;
+    case Offer::NOT_CONNECTED: stats_.dropped_not_connected += messages; break;
+    case Offer::FAILED: stats_.dropped_failed += messages; break;
+    }
+    stats_.dropped += messages;
+}
+
 void Gateway::flush() noexcept {
     if (batch_.empty()) return;
-    ++stats_.offers; stats_.offer_bytes += batch_.size();
-    if (pub_.publish(batch_.data(), batch_.size())) stats_.published += pending_;
-    else stats_.dropped += pending_;
+    offer(batch_.data(), batch_.size(), pending_);
     batch_.clear();
     pending_ = 0;
 }
@@ -168,12 +174,14 @@ void Gateway::publish_definitions(uint64_t now) noexcept {
 
 void Gateway::on_connected(uint64_t now) {
     if (rec_) rec_->event(now, "connected");
+    ++stats_.connects; stats_.connected.set(1);
     publish_definitions(now);
     flush();
 }
 
 void Gateway::on_disconnected(uint64_t now) {
     if (rec_) rec_->event(now, "disconnected");
+    ++stats_.disconnects; stats_.connected.set(0);
     for (auto& b : books_) b.strategy->on_disconnect();
 }
 
@@ -186,6 +194,7 @@ void Gateway::tick(uint64_t now) {
             ++stats_.snapshot_requests;
         }
     }
+    stats_.resyncs.set(resyncs());
     flush();
 }
 
@@ -270,7 +279,7 @@ void Gateway::handle_record(const StreamDef& sd, const Instrument* in, simdjson:
         uint8_t buf[512];
         begin_message(buf, *sd.msg, in->id, pack_.venue_id, 0, recv_ts);
         if (!Mapper::map_flat(sd, rec, sd.has_each ? &frame_ : nullptr, buf, err)) { ++stats_.map_errors; log_error(sd.message.c_str(), err); return; }
-        uint64_t* counter = &stats_.other;
+        Counter* counter = &stats_.other;
         if (sd.msg->template_id == sp_canonical::Trade::kTemplateId) counter = &stats_.trades;
         else if (sd.msg->template_id == sp_canonical::Quote::kTemplateId) counter = &stats_.quotes;
         publish(buf, sd.msg->size, *counter);

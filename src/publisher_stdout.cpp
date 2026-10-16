@@ -22,17 +22,17 @@ void prefix(std::ostream& o, const char* name, const T& m) {
 }
 } // namespace
 
-bool StdoutPublisher::publish(const uint8_t* buf, size_t total) noexcept {
+Offer StdoutPublisher::publish(const uint8_t* buf, size_t total) noexcept {
     size_t off = 0;
     while (off + kHeaderSize <= total) {
         uint16_t block = 0;
         std::memcpy(&block, buf + off, 2);
         const size_t len = kHeaderSize + block;
-        if (len < kHeaderSize + 32 || off + len > total) { out_ << "Unknown len=" << (total - off) << '\n'; return false; }
-        if (!publish_one(buf + off, len)) return false;
+        if (len < kHeaderSize + 32 || off + len > total) { out_ << "Unknown len=" << (total - off) << '\n'; return Offer::FAILED; }
+        if (!publish_one(buf + off, len)) return Offer::FAILED;
         off += len;
     }
-    return off == total;
+    return off == total ? Offer::OK : Offer::FAILED;
 }
 
 bool StdoutPublisher::publish_one(const uint8_t* p, size_t len) noexcept {

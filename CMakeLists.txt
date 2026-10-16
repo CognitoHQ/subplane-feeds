@@ -51,6 +51,9 @@ add_library(feeds_core STATIC
     src/replayer.cpp
     src/recorder.cpp
     src/gateway.cpp
+    src/obs/prom_writer.cpp
+    src/obs/endpoint_key.cpp
+    src/obs/observe.cpp
 )
 target_include_directories(feeds_core PUBLIC src contract)
 target_link_libraries(feeds_core PUBLIC PkgConfig::YAML_CPP feeds_simdjson Threads::Threads PRIVATE feeds_warnings)
@@ -60,12 +63,14 @@ if(FEEDS_WITH_AERON)
     target_compile_definitions(feeds_core PUBLIC FEEDS_WITH_AERON=1)
 endif()
 
+target_compile_definitions(feeds_core PUBLIC FEEDS_VERSION="${PROJECT_VERSION}")
+
 add_executable(spwsgw src/main.cpp)
 target_link_libraries(spwsgw PRIVATE feeds_core feeds_warnings)
 if(FEEDS_WITH_NETWORK)
     find_package(Boost 1.74 REQUIRED)
     find_package(OpenSSL REQUIRED)
-    target_sources(spwsgw PRIVATE src/ws_client.cpp src/rest_client.cpp)
+    target_sources(spwsgw PRIVATE src/ws_client.cpp src/rest_client.cpp src/http_server.cpp)
     target_include_directories(spwsgw SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
     target_link_libraries(spwsgw PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     target_compile_definitions(spwsgw PRIVATE FEEDS_WITH_NETWORK=1)

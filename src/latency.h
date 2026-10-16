@@ -18,6 +18,7 @@ public:
     uint64_t mean() const noexcept { const auto s = h_.snapshot(); return s.count ? s.sum / s.count : 0; }
     uint64_t max() const noexcept { return h_.max.load(std::memory_order_relaxed); }
     uint64_t quantile(double q) const noexcept { return percentile(h_.snapshot(), q); }
+    LogHistogram::Snapshot snapshot() const noexcept { return h_.snapshot(); }
 private:
     LogHistogram h_;
 };
