@@ -40,6 +40,9 @@ void each_counter(const GatewayStats& s, F&& f) {
     f("connects", "Connections to the exchange established", s.connects);
     f("disconnects", "Connections to the exchange lost or closed", s.disconnects);
     f("resyncs", "Book resynchronisations after a gap, summed over books", s.resyncs);
+    f("state_messages", "SourceState messages offered on the state stream", s.state_messages);
+    f("state_dropped", "SourceState messages the state stream did not take", s.state_dropped);
+    f("republished", "Instruments republished in band after a Republish request", s.republished);
 }
 
 } // namespace
@@ -75,6 +78,7 @@ Observer::Observer(const Gateway& gw, const Pack& pack, const Instruments& ins, 
         }
     }
     downstream_key_ = pub.endpoint_key(id_.host);
+    if (const Publisher* sp = pub.state_publisher()) state_key_ = sp->endpoint_key(id_.host);
 }
 
 std::string Observer::data_state() const {
@@ -110,6 +114,13 @@ std::string Observer::metrics_text() const {
     w.gauge("subplane_gateway_publication_connected", "1 while a subscriber is connected to the output", v, pub_.connected() ? 1 : 0);
     w.gauge("subplane_gateway_last_sequence", "Sequence of the last message offered", v, static_cast<double>(static_cast<uint64_t>(s.last_sequence)));
     w.gauge("subplane_gateway_instruments", "Instruments configured", v, static_cast<double>(ins_.all().size()));
+    const char* state_help = "Instruments by SourceState: ok, stale (lost since it was ok), unknown (not yet ok)";
+    w.gauge("subplane_gateway_instrument_state", state_help, {{"venue", pack_.exchange}, {"state", "ok"}}, static_cast<double>(static_cast<uint64_t>(s.instruments_ok)));
+    w.gauge("subplane_gateway_instrument_state", state_help, {{"venue", pack_.exchange}, {"state", "stale"}}, static_cast<double>(static_cast<uint64_t>(s.instruments_stale)));
+    w.gauge("subplane_gateway_instrument_state", state_help, {{"venue", pack_.exchange}, {"state", "unknown"}}, static_cast<double>(static_cast<uint64_t>(s.instruments_unknown)));
+    const char* rp_help = "Republish requests by result";
+    w.counter("subplane_gateway_republish_requests_total", rp_help, {{"venue", pack_.exchange}, {"result", "queued"}}, s.republish_queued);
+    w.counter("subplane_gateway_republish_requests_total", rp_help, {{"venue", pack_.exchange}, {"result", "not_found"}}, s.republish_not_found);
     w.histogram_ns("subplane_gateway_frame_to_offer_seconds", "Frame entry to the end of its last offer, frames that published",
                    v, gw_.frame_latency().snapshot());
     w.histogram_ns("subplane_gateway_recv_to_offer_seconds", "Frame receive (RecvTs, CLOCK_REALTIME) to the end of its last offer",
@@ -125,6 +136,10 @@ std::string Observer::metrics_text() const {
     if (!downstream_key_.empty()) {
         w.gauge("subplane_topology_edge", edge_help, {{"direction", "downstream"}, {"role", "data"}, {"key", downstream_key_}, {"venue", pack_.exchange}},
                 pub_.connected() ? 1 : 0);
+    }
+    if (!state_key_.empty()) {
+        w.gauge("subplane_topology_edge", edge_help, {{"direction", "downstream"}, {"role", "recap"}, {"key", state_key_}, {"venue", pack_.exchange}},
+                pub_.state_publisher()->connected() ? 1 : 0);
     }
     return w.str();
 }
@@ -170,6 +185,13 @@ std::string Observer::topology_json() const {
         // agent's upstream edge with this same key.
         o += "{\"key\":" + json_str(downstream_key_) + ",\"role\":\"data\",\"state\":" + json_str(publication_state()) +
              ",\"local\":{\"venue\":" + json_str(pack_.exchange) + "},\"describe\":" + json_str(pub_.describe()) + "}";
+    }
+    if (!state_key_.empty()) {
+        // The state stream: losing it loses recovery (SourceState), not data, hence role recap.
+        const Publisher* sp = pub_.state_publisher();
+        o += std::string(downstream_key_.empty() ? "" : ",") + "{\"key\":" + json_str(state_key_) + ",\"role\":\"recap\",\"state\":" +
+             json_str(sp->connected() ? "up" : "down") + ",\"local\":{\"venue\":" + json_str(pack_.exchange) + "},\"describe\":" +
+             json_str(sp->describe() + " (SourceState)") + "}";
     }
     return o + "]}";
 }

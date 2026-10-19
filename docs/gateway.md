@@ -6,7 +6,7 @@ One I/O thread. A WebSocket frame is parsed with simdjson On Demand, routed to a
 
 ## Sequence
 
-One counter for the whole gateway, every published message, gap-free, assigned at publish time. A message the publisher drops (no subscriber, sustained back pressure) still consumes its number, so the agent sees a real gap for a real loss. The agent partition is configured `framing: { length: packet, sequence: message.Sequence }`.
+One counter for the whole gateway, every published message, gap-free, assigned at publish time. A message the publisher drops (no subscriber, sustained back pressure) still consumes its number, so the agent sees a real gap for a real loss. The agent partition is configured `framing: { length: schema, sequence: message.Sequence }`: an offer carries several messages back to back (see Batching).
 
 ## Heartbeats and definitions
 
@@ -18,7 +18,23 @@ One counter for the whole gateway, every published message, gap-free, assigned a
 
 ## Books
 
-Each (book stream, instrument) pair owns a strategy and a local book. Strategies that need a REST snapshot (`binance_diff`) ask for it through the gateway; the network loop fetches it. In-band strategies (`l2_inband`, `snapshot_only`) get everything from the socket. On disconnect every book is dropped and resynced after reconnect. `--snapshot-every N` (default 100) republishes the top ten levels every N updates per instrument so late joiners and the agent's last-value cache converge quickly.
+Each (book stream, instrument) pair owns a strategy and a local book. Strategies that need a REST snapshot (`binance_diff`) ask for it through the gateway; the network loop fetches it. In-band strategies (`l2_inband`, `snapshot_only`) get everything from the socket. On disconnect every book is dropped and resynced after reconnect. Every sync (first sync, resync after a gap, in-band resync, republish) publishes the whole book: `BookUpdate{Action=Clear}`, then every level as `Add`, bids then asks, best first (`Level` is the index up to 9, 255 beyond), then the top-ten `BookSnapshot`. A reader that applies BookUpdates holds the exchange's full book from the Clear on. `--snapshot-every N` (default 100) republishes the top ten levels every N updates per instrument so late joiners and the agent's last-value cache converge quickly. `snapshot_only` books (Bitstamp) are whole in every event and publish only the `BookSnapshot`.
+
+## Recovery
+
+Whether an instrument's in-band state can be trusted goes on a **state stream** of its own (`--state-stream`, default 1002, same channel; `0` turns it off), as SPP `SourceState` (`contract/subplane_proto.xml`, template 30; spec `docs/protocol/subplane-protocol.md` in the agent repo). Never in the canonical data: recovery stays independent of the data schema, and apps see only market data.
+
+| State | When |
+|---|---|
+| `Unknown` | from start until the instrument is first whole: connected, and every book of it synced |
+| `Ok` (`Startup`, `Resync`, `Republish`) | once it is whole, after the burst that made it so |
+| `Stale` (`Gap`, `Disconnect`) | when it was Ok and a book lost sync, or the connection dropped |
+
+- **Ordering.** `Sequence` is the last data Sequence published before the state; the data batch is flushed first. A subscriber applies the state once its copy of the data stream reached that Sequence.
+- **The beat.** On the heartbeat timer, a `SourceState` with InstrumentId 0: Ok while connected, Stale otherwise, carrying `SourceEpoch` (the process start; `--source-epoch` overrides, a replay uses 1), so a late subscriber learns the epoch and a restart without asking.
+- **Republish.** `Gateway::republish(instrument | 0, venue, correlation)` queues instruments (a queued one joins, taking the newer correlation); `tick()` republishes at most `--republish-per-second` (default 20), one per tick: the definition, every synced book whole, then `SourceState` with the correlation. An unsynced book is not republished; its state says why. The control input that calls it (SPP `Republish` over Aeron) is the next step.
+- **On `--out stdout`** the state stream is printed in the same output, in publish order: `SourceState iid=<n> venue=<n> seq=<n> state=<..> reason=<..> corr=<n> epoch=<n>`. Fixtures include these lines.
+- **Cost.** A Binance resync is about 2,000 BookUpdates (64 B each, 93 offers of 1376 B) in one burst. On back pressure the rest of the burst is dropped and counted; downstream sees the gap and recovers by Republish.
 
 ## Recording and replay
 

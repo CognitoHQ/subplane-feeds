@@ -6,11 +6,41 @@
 #include <aeronmd.h>
 
 #include <chrono>
+#include <memory>
 #include <sched.h>
 #include <string>
 
 namespace feeds {
 namespace {
+
+// INTENT: one Aeron client per process; the state stream is a second exclusive
+// publication on it, owned and closed by the data publisher below.
+std::string resolved_dir(const std::string& configured) {
+    if (!configured.empty()) return configured;
+    char buf[512] = {};
+    return aeron_default_path(buf, sizeof buf) >= 0 ? std::string(buf) : std::string();
+}
+
+class AeronStatePublication final : public Publisher {
+public:
+    AeronStatePublication(aeron_exclusive_publication_t* pub, const AeronPublisherConfig& cfg)
+        : pub_(pub), cfg_(cfg), what_("aeron " + cfg.channel + " stream " + std::to_string(cfg.state_stream_id)) {}
+    Offer publish(const uint8_t* msg, size_t len) noexcept override {
+        // State changes are rare and small: one try, then the caller counts a drop;
+        // a subscriber that missed one asks for Republish.
+        const int64_t r = aeron_exclusive_publication_offer(pub_, msg, len, nullptr, nullptr);
+        if (r >= 0) return Offer::OK;
+        if (r == AERON_PUBLICATION_NOT_CONNECTED) return Offer::NOT_CONNECTED;
+        if (r == AERON_PUBLICATION_BACK_PRESSURED || r == AERON_PUBLICATION_ADMIN_ACTION) return Offer::BACK_PRESSURED;
+        return Offer::FAILED;
+    }
+    bool connected() const noexcept override { return pub_ && aeron_exclusive_publication_is_connected(pub_); }
+    std::string describe() const override { return what_; }
+    std::string endpoint_key(std::string_view host) const override { return aeron_key(cfg_.channel, cfg_.state_stream_id, resolved_dir(cfg_.aeron_dir), host); }
+    aeron_exclusive_publication_t* pub_;
+    AeronPublisherConfig cfg_;
+    std::string what_;
+};
 
 class AeronPublisher final : public Publisher {
 public:
@@ -33,16 +63,16 @@ public:
         aeron_context_set_client_name(ctx_, "spwsgw");
         if (aeron_init(&client_, ctx_) < 0) return fail("init (is the media driver running?)", err);
         if (aeron_start(client_) < 0) return fail("start", err);
-        aeron_async_add_exclusive_publication_t* async = nullptr;
-        if (aeron_async_add_exclusive_publication(&async, client_, cfg_.channel.c_str(), cfg_.stream_id) < 0) return fail("add publication", err);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.driver_timeout_ms);
-        while (!pub_) {
-            if (aeron_async_add_exclusive_publication_poll(&pub_, async) < 0) return fail("publication", err);
-            if (std::chrono::steady_clock::now() > deadline) { err = "aeron: timed out adding the publication"; return false; }
-            sched_yield();
+        if (!add_publication(cfg_.stream_id, pub_, err)) return false;
+        if (cfg_.state_stream_id) {
+            aeron_exclusive_publication_t* sp = nullptr;
+            if (!add_publication(cfg_.state_stream_id, sp, err)) return false;
+            state_ = std::make_unique<AeronStatePublication>(sp, cfg_);
         }
         return true;
     }
+
+    Publisher* state_publisher() const noexcept override { return state_.get(); }
 
     // INTENT: a gateway never blocks on a slow or absent subscriber. Back pressure
     // and admin actions get a short spin; NOT_CONNECTED (nobody listening yet) and
@@ -67,20 +97,14 @@ public:
 
     // The same driver directory the agent resolves (its aeron_util::resolved_dir),
     // so this key equals the agent's upstream key for the same stream.
-    std::string endpoint_key(std::string_view host) const override {
-        std::string dir = cfg_.aeron_dir;
-        if (dir.empty()) {
-            char buf[512] = {};
-            if (aeron_default_path(buf, sizeof buf) >= 0) dir = buf;
-        }
-        return aeron_key(cfg_.channel, cfg_.stream_id, dir, host);
-    }
+    std::string endpoint_key(std::string_view host) const override { return aeron_key(cfg_.channel, cfg_.stream_id, resolved_dir(cfg_.aeron_dir), host); }
 
     std::string describe() const override {
         return "aeron " + cfg_.channel + " stream " + std::to_string(cfg_.stream_id) + (cfg_.embedded_driver ? " (embedded driver)" : "");
     }
 
     void close() noexcept override {
+        if (state_) { aeron_exclusive_publication_close(state_->pub_, nullptr, nullptr); state_.reset(); }
         if (pub_) { aeron_exclusive_publication_close(pub_, nullptr, nullptr); pub_ = nullptr; }
         if (client_) { aeron_close(client_); client_ = nullptr; }
         if (ctx_) { aeron_context_close(ctx_); ctx_ = nullptr; }
@@ -89,6 +113,17 @@ public:
     }
 
 private:
+    bool add_publication(int32_t stream_id, aeron_exclusive_publication_t*& out, std::string& err) {
+        aeron_async_add_exclusive_publication_t* async = nullptr;
+        if (aeron_async_add_exclusive_publication(&async, client_, cfg_.channel.c_str(), stream_id) < 0) return fail("add publication", err);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.driver_timeout_ms);
+        while (!out) {
+            if (aeron_async_add_exclusive_publication_poll(&out, async) < 0) return fail("publication", err);
+            if (std::chrono::steady_clock::now() > deadline) { err = "aeron: timed out adding the publication"; return false; }
+            sched_yield();
+        }
+        return true;
+    }
     static bool fail(const char* what, std::string& err) { err = std::string("aeron ") + what + ": " + aeron_errmsg(); return false; }
 
     AeronPublisherConfig cfg_;
@@ -97,6 +132,7 @@ private:
     aeron_context_t* ctx_ = nullptr;
     aeron_t* client_ = nullptr;
     aeron_exclusive_publication_t* pub_ = nullptr;
+    std::unique_ptr<AeronStatePublication> state_;
 };
 
 } // namespace

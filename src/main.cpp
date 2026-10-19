@@ -2,7 +2,8 @@
 //
 //   spwsgw --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
 //                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001]
-//                    [--aeron-dir D] [--embedded-driver] [--record frames.jsonl] [--replay frames.jsonl]
+//                    [--aeron-dir D] [--embedded-driver] [--state-stream 1002] [--record frames.jsonl] [--replay frames.jsonl]
+//                    [--republish-per-second 20] [--source-epoch N]
 //                    [--snapshot-every 100] [--batch-bytes 1376] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
 //                    [--http 127.0.0.1:9101] [--instance NAME] [--site S] [--env E] [--labels k=v,...]
 //   spwsgw models        # the canonical messages and fields a pack can target
@@ -41,7 +42,8 @@ void on_signal(int) { g_stop = 1; }
 
 void usage() {
     std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
-               "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
+               "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--state-stream N] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
+               "                        [--republish-per-second N] [--source-epoch N]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--spin] [--quiet]\n"
                "                        [--http HOST:PORT] [--instance NAME] [--site S] [--env E] [--labels k=v,...]\n"
                "       spwsgw models\n", stderr);
@@ -99,6 +101,7 @@ int main(int argc, char** argv) {
     std::set<std::string> flags;
     const std::set<std::string> valued = {"pack", "registry", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
                                           "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds",
+                                          "state-stream", "republish-per-second", "source-epoch",
                                           "http", "instance", "site", "env", "labels"};
     const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe", "spin"};
     for (int i = 1; i < argc; ++i) {
@@ -134,14 +137,22 @@ int main(int argc, char** argv) {
     opts.snapshot_every = static_cast<uint32_t>(getu("snapshot-every", 100));
     opts.batch_bytes = static_cast<uint32_t>(getu("batch-bytes", 1376));   // one Aeron MTU (1408) minus its 32-byte frame header
     opts.log_errors = !quiet;
+    opts.republish_per_second = static_cast<uint32_t>(getu("republish-per-second", 20));
+    const bool replaying = a.count("replay") != 0;
+    const uint64_t started = now_ns();
+    // A replay is deterministic: a fixed epoch unless given, so recordings diff exactly.
+    opts.source_epoch = getu("source-epoch", replaying ? 1 : started);
 
     std::unique_ptr<Publisher> owned;
     Publisher* pub = nullptr;
+    Publisher* state_pub = nullptr;
     StdoutPublisher stdout_pub(std::cout);
+    StdoutStatePublisher stdout_state(std::cout);
     NullPublisher null_pub;
     const std::string out = get("out", "aeron");
     if (out == "stdout") {
         pub = &stdout_pub;
+        if (getu("state-stream", 1002)) state_pub = &stdout_state;   // interleaved with the data, in publish order
     } else if (out == "null") {
         pub = &null_pub;
     } else if (out == "aeron") {
@@ -151,9 +162,12 @@ int main(int argc, char** argv) {
         ac.stream_id = static_cast<int32_t>(getu("stream-id", 1001));
         ac.aeron_dir = get("aeron-dir", "");
         ac.embedded_driver = flags.count("embedded-driver") != 0;
+        ac.state_stream_id = static_cast<int32_t>(getu("state-stream", 1002));
+        if (ac.state_stream_id == ac.stream_id) { std::fputs("spwsgw: --state-stream must differ from --stream-id\n", stderr); return 2; }
         owned = make_aeron_publisher(ac, err);
         if (!owned) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 1; }
         pub = owned.get();
+        state_pub = pub->state_publisher();
 #else
         std::fputs("spwsgw: built without Aeron; use --out stdout\n", stderr); return 2;
 #endif
@@ -166,7 +180,7 @@ int main(int argc, char** argv) {
         rec = &recorder;
     }
 
-    Gateway gw(pack, instruments, *pub, opts, rec);
+    Gateway gw(pack, instruments, *pub, opts, rec, state_pub);
     if (flags.count("subscribe")) { for (const auto& m : gw.subscribe_messages()) std::printf("%s\n", m.c_str()); return 0; }
     if (!quiet) std::fprintf(stderr, "spwsgw: %s, %zu instruments, %zu streams -> %s\n", pack.exchange.c_str(), instruments.all().size(), gw.stream_names().size(), pub->describe().c_str());
 
@@ -182,7 +196,7 @@ int main(int argc, char** argv) {
     id.version = FEEDS_VERSION;
     id.site = get("site", "");
     id.env = get("env", "");
-    id.epoch = now_ns();
+    id.epoch = started;
     id.pid = static_cast<int32_t>(::getpid());
     for (const auto& kv : split(get("labels", ""), ',')) {
         const size_t eq = kv.find('=');
@@ -190,7 +204,6 @@ int main(int argc, char** argv) {
         if (eq == std::string::npos || !Observer::valid_label_name(k)) { std::fprintf(stderr, "spwsgw: --labels: invalid label '%s' (want name=value)\n", kv.c_str()); return 2; }
         id.labels.emplace_back(k, kv.substr(eq + 1));
     }
-    const bool replaying = a.count("replay") != 0;
     const std::string upstream = replaying ? "file://" + std::filesystem::absolute(a["replay"]).lexically_normal().string() : pack.connect.url;
     const Observer observer(gw, pack, instruments, *pub, id, upstream, !replaying);
 #if FEEDS_WITH_NETWORK

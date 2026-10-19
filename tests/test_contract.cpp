@@ -44,3 +44,25 @@ TEST_CASE("canonical field table matches contract/subplane_canonical.xml") {
     CHECK(messages == 8);
     CHECK(fields > 30);
 }
+
+// The vendored SPP codec must match the vendored SPP schema (both copied from the agent repo).
+#include "subplane_proto_codec.h"
+
+TEST_CASE("SPP codec constants match contract/subplane_proto.xml") {
+    std::ifstream in(std::string(FEEDS_SOURCE_DIR) + "/contract/subplane_proto.xml");
+    REQUIRE(in);
+    std::stringstream ss; ss << in.rdbuf();
+    const std::string xml = ss.str();
+    struct M { const char* name; uint16_t id, block; };
+    const M known[] = {
+        {"Hello", sp_proto::HelloEncoder::kTemplateId, sp_proto::HelloEncoder::kBlockLength},
+        {"Status", sp_proto::StatusEncoder::kTemplateId, sp_proto::StatusEncoder::kBlockLength},
+        {"Republish", sp_proto::RepublishEncoder::kTemplateId, sp_proto::RepublishEncoder::kBlockLength},
+        {"SourceState", sp_proto::SourceStateEncoder::kTemplateId, sp_proto::SourceStateEncoder::kBlockLength},
+    };
+    CHECK(xml.find("id=\"" + std::to_string(sp_proto::kSchemaId) + "\" version=\"" + std::to_string(sp_proto::kSchemaVersion) + "\"") != std::string::npos);
+    for (const M& m : known) {
+        const std::string tag = std::string("<sbe:message name=\"") + m.name + "\" id=\"" + std::to_string(m.id) + "\" blockLength=\"" + std::to_string(m.block) + "\"";
+        CHECK_MESSAGE(xml.find(tag) != std::string::npos, tag);
+    }
+}

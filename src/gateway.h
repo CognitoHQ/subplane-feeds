@@ -5,6 +5,12 @@
 // iterates `each` records, maps flat streams, drives book strategies, assigns the
 // gap-free Sequence, and publishes heartbeats and instrument definitions on a
 // timer. One thread calls everything.
+//
+// Recovery (docs/gateway.md, "Recovery"): every instrument has a SourceState
+// (Unknown, Stale, Ok) published on a state stream of its own, never in the
+// canonical data. A book that (re)syncs publishes itself whole in band (Clear,
+// then every level), then the state goes Ok at that Sequence. republish() asks
+// for the same again, rate-limited, for one instrument or all.
 
 #include "book/book.h"
 #include "one_writer.h"
@@ -14,6 +20,7 @@
 #include "pack.h"
 #include "publisher.h"
 #include "recorder.h"
+#include "subplane_proto_codec.h"
 
 #include <simdjson.h>
 
@@ -31,6 +38,8 @@ struct GatewayOptions {
     uint32_t snapshot_every = 100;   // BookSnapshot every N book updates per instrument (0 = only on sync)
     uint32_t batch_bytes = 1376;     // messages of one input frame share one offer up to this many bytes (0 = one message per offer)
     bool     log_errors = true;      // first few mapping errors to stderr
+    uint64_t source_epoch = 0;       // SourceState.SourceEpoch: this process's start, ns; a new value tells subscribers Sequence restarted
+    uint32_t republish_per_second = 20;   // instruments republished per second at most (one per tick() at the most)
 };
 
 // Written by the gateway thread only; readable from any thread (one_writer.h), which
@@ -46,11 +55,18 @@ struct GatewayStats {
     OneWriter connected;               // 1 between on_connected and on_disconnected
     OneWriter last_sequence;           // the last Sequence offered
     OneWriter resyncs;                 // sum over book strategies, refreshed by tick()
+    OneWriter state_messages, state_dropped;              // SourceState offers, and those not delivered
+    OneWriter republish_queued, republish_not_found;      // republish() requests by outcome
+    OneWriter republished;                                // instruments republished
+    OneWriter instruments_ok, instruments_stale, instruments_unknown;   // gauges: instruments by SourceState
 };
+
+enum class RepublishResult : uint8_t { QUEUED, NOT_FOUND };
 
 class Gateway {
 public:
-    Gateway(const Pack& pack, const Instruments& instruments, Publisher& pub, GatewayOptions opts, Recorder* rec = nullptr);
+    // `state`: where SourceState goes (length-prefixed SPP frames); null publishes none.
+    Gateway(const Pack& pack, const Instruments& instruments, Publisher& pub, GatewayOptions opts, Recorder* rec = nullptr, Publisher* state = nullptr);
 
     // A raw text frame from the exchange (or a recording). Records it when a recorder is attached.
     void on_frame(std::string_view json, uint64_t recv_ts);
@@ -62,6 +78,11 @@ public:
     void tick(uint64_t now);
     // Pops one pending snapshot request (strategies that need a snapshot). False when none.
     bool next_snapshot_request(SnapshotRequest& out);
+    // SPP Republish: publish `instrument` (0 = every one) again, in band, from tick(): its
+    // definition, its books whole when synced, then its SourceState with `correlation`.
+    // `venue` 0 matches any. A request for an instrument already queued joins it.
+    RepublishResult republish(uint64_t instrument, uint16_t venue, uint64_t correlation) noexcept;
+    sp_proto::SourceStateCode state(uint32_t instrument_id) const noexcept;
 
     // Every (stream, instrument) name, e.g. "btcusdt@trade"; the order is stream-major.
     std::vector<std::string> stream_names() const;
@@ -76,7 +97,13 @@ public:
     uint64_t resyncs() const noexcept;   // gateway thread; other threads read stats().resyncs
 
 private:
-    struct BookSlot { std::unique_ptr<BookStrategy> strategy; const StreamDef* sd; const Instrument* ins; };
+    struct BookSlot { std::unique_ptr<BookStrategy> strategy; const StreamDef* sd; const Instrument* ins; size_t idx; };
+    struct InsState {
+        sp_proto::SourceStateCode code = sp_proto::SourceStateCode::Unknown;
+        sp_proto::SourceReason reason = sp_proto::SourceReason::None;
+        bool ever_ok = false, queued = false;
+        uint64_t correlation = 0;      // of the Republish that queued it
+    };
 
     void publish(uint8_t* msg, size_t len, OneWriter& counter) noexcept;   // appends to the current batch
     void offer(const uint8_t* msg, size_t len, uint64_t messages) noexcept;
@@ -84,6 +111,15 @@ private:
     void publish_heartbeat(uint64_t now) noexcept;
     void publish_definitions(uint64_t now) noexcept;
     void publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept;
+    void publish_book_update(const BookSlot& slot, Side side, Action action, uint8_t level, int64_t px, int64_t qty, uint64_t exch_ts, uint64_t recv_ts) noexcept;
+    void publish_definition(const Instrument& in, uint64_t now) noexcept;
+    void publish_state(uint64_t instrument, sp_proto::SourceStateCode code, sp_proto::SourceReason reason, uint64_t correlation) noexcept;
+    // Publishes instrument `i`'s SourceState when it changed (or always, with `force`).
+    // `why` is the reason when it is not Ok; Ok says Startup, Resync or Republish itself.
+    void refresh_state(size_t i, sp_proto::SourceReason why, bool force = false, uint64_t correlation = 0) noexcept;
+    bool instrument_ok(size_t i) const noexcept;
+    void republish_one(size_t i, uint64_t now) noexcept;
+    void count_states() noexcept;
     void process_frame(std::string_view json, uint64_t recv_ts);
     void handle_record(const StreamDef& sd, const Instrument* in, simdjson::ondemand::object& rec, std::string_view kind, uint64_t recv_ts) noexcept;
     void cache_frame_tokens(const StreamDef& sd, simdjson::ondemand::object& root) noexcept;
@@ -96,6 +132,7 @@ private:
     Publisher& pub_;
     GatewayOptions opts_;
     Recorder* rec_;
+    Publisher* state_;
     simdjson::ondemand::parser parser_;
     std::string buf_;                  // frame copy with simdjson padding
     std::vector<BookSlot> books_;      // (book stream, instrument) pairs
@@ -104,6 +141,10 @@ private:
     std::vector<uint8_t> batch_;       // messages of the current frame, back to back, each self-framed by its SBE header
     uint64_t pending_ = 0;             // messages in batch_
     std::deque<SnapshotRequest> requests_;
+    std::vector<InsState> states_;     // per instrument, in ins_.all() order
+    std::deque<size_t> republish_;     // instrument indexes waiting for republish_one()
+    uint64_t next_republish_ = 0;
+    bool connected_ = false;
     FrameTokens frame_;                // "$." field tokens of the current frame
     std::string_view kind_;            // the `kind` role value of the current frame, when frame-scope
     GatewayStats stats_;

@@ -21,6 +21,10 @@ void replace_value(std::string& s, std::string_view name, std::string_view json)
 void replace_text(std::string& s, std::string_view name, std::string_view text) {
     replace_all(s, "{" + std::string(name) + "}", text);
 }
+bool has_full(const std::vector<BookEmit>& v) noexcept {
+    for (const BookEmit& e : v) if (e.kind == BookEmit::FULL) return true;
+    return false;
+}
 std::string json_quoted(std::string_view s) { return "\"" + std::string(s) + "\""; }
 std::string array_of(const std::vector<std::string>& items) {
     std::string a = "[";
@@ -30,20 +34,23 @@ std::string array_of(const std::vector<std::string>& items) {
 
 } // namespace
 
-Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pub, GatewayOptions opts, Recorder* rec)
-    : pack_(pack), ins_(instruments), pub_(pub), opts_(opts), rec_(rec) {
+Gateway::Gateway(const Pack& pack, const Instruments& instruments, Publisher& pub, GatewayOptions opts, Recorder* rec, Publisher* state)
+    : pack_(pack), ins_(instruments), pub_(pub), opts_(opts), rec_(rec), state_(state) {
     for (const StreamDef& sd : pack_.streams) {
         if (sd.book.empty()) continue;
-        for (const Instrument& in : ins_.all()) {
+        for (size_t i = 0; i < ins_.all().size(); ++i) {
             BookSlot slot;
             std::string err;
             slot.strategy = make_strategy(pack_, sd, opts_.snapshot_every, err);
             if (!slot.strategy) continue;   // the pack loader rejects unknown strategies
             slot.sd = &sd;
-            slot.ins = &in;
+            slot.ins = &ins_.all()[i];
+            slot.idx = i;
             books_.push_back(std::move(slot));
         }
     }
+    states_.resize(ins_.all().size());
+    count_states();
     buf_.reserve(65536 + simdjson::SIMDJSON_PADDING);
     emits_.reserve(1024);
     top_.reserve(10);
@@ -152,41 +159,150 @@ void Gateway::publish_heartbeat(uint64_t now) noexcept {
     last_heartbeat_ = now;
 }
 
-void Gateway::publish_definitions(uint64_t now) noexcept {
+void Gateway::publish_definition(const Instrument& in, uint64_t now) noexcept {
     const CanonicalMessage* m = find_message("InstrumentDefinition");
-    for (const Instrument& in : ins_.all()) {
-        uint8_t buf[sp_canonical::InstrumentDefinition::kSize];
-        begin_message(buf, *m, in.id, pack_.venue_id, 0, now);
-        put_u64(buf, kPrefixExchangeTs, now);
-        auto chars = [&](const char* name, const std::string& v) {
-            const CanonicalField* f = find_field(*m, name);
-            std::memcpy(buf + f->offset, v.data(), std::min<size_t>(v.size(), f->size));
-        };
-        chars("Symbol", in.symbol);
-        chars("Exchange", pack_.exchange);
-        chars("Base", in.base);
-        chars("Quote", in.quote);
-        put(buf, find_field(*m, "Status")->offset, static_cast<uint8_t>(1)); // Trading
-        publish(buf, sizeof buf, stats_.definitions);
-    }
+    uint8_t buf[sp_canonical::InstrumentDefinition::kSize];
+    begin_message(buf, *m, in.id, pack_.venue_id, 0, now);
+    put_u64(buf, kPrefixExchangeTs, now);
+    auto chars = [&](const char* name, const std::string& v) {
+        const CanonicalField* f = find_field(*m, name);
+        std::memcpy(buf + f->offset, v.data(), std::min<size_t>(v.size(), f->size));
+    };
+    chars("Symbol", in.symbol);
+    chars("Exchange", pack_.exchange);
+    chars("Base", in.base);
+    chars("Quote", in.quote);
+    put(buf, find_field(*m, "Status")->offset, static_cast<uint8_t>(1)); // Trading
+    publish(buf, sizeof buf, stats_.definitions);
+}
+
+void Gateway::publish_definitions(uint64_t now) noexcept {
+    for (const Instrument& in : ins_.all()) publish_definition(in, now);
     last_definitions_ = now;
+}
+
+// INTENT: the state stream carries only SPP, never canonical data, so recovery
+// stays independent of the data schema. Sequence is the last data sequence
+// assigned; callers flush the data batch first, so a subscriber that has seen
+// Sequence on the data stream has seen everything the state speaks about.
+void Gateway::publish_state(uint64_t instrument, sp_proto::SourceStateCode code, sp_proto::SourceReason reason, uint64_t correlation) noexcept {
+    if (!state_) return;
+    uint8_t buf[4 + 8 + sp_proto::SourceStateEncoder::kBlockLength];
+    sp_proto::SourceStateEncoder e(buf + 4, sizeof buf - 4);
+    e.CorrelationId(correlation).SourceEpoch(opts_.source_epoch).Instrument(instrument).Sequence(seq_)
+        .Venue(pack_.venue_id).State(code).Reason(reason);
+    const uint32_t n = static_cast<uint32_t>(e.finish());
+    std::memcpy(buf, &n, 4);   // SPP framing: a u32 length per message
+    ++stats_.state_messages;
+    if (state_->publish(buf, 4 + n) != Offer::OK) ++stats_.state_dropped;
+}
+
+bool Gateway::instrument_ok(size_t i) const noexcept {
+    if (!connected_) return false;
+    for (const BookSlot& b : books_) if (b.idx == i && !b.strategy->synced()) return false;
+    return true;
+}
+
+void Gateway::refresh_state(size_t i, sp_proto::SourceReason why, bool force, uint64_t correlation) noexcept {
+    using sp_proto::SourceStateCode;
+    using sp_proto::SourceReason;
+    InsState& st = states_[i];
+    const bool ok = instrument_ok(i);
+    const SourceStateCode want = ok ? SourceStateCode::Ok : st.ever_ok ? SourceStateCode::Stale : SourceStateCode::Unknown;
+    if (want == st.code && !force) return;
+    SourceReason r = why;
+    if (ok) r = why == SourceReason::Republish ? why : st.ever_ok ? SourceReason::Resync : SourceReason::Startup;
+    else if (want == st.code) r = st.reason;   // forced and unchanged: repeat why it is not Ok
+    st.code = want;
+    st.reason = r;
+    st.ever_ok = st.ever_ok || ok;
+    flush();
+    publish_state(ins_.all()[i].id, want, r, correlation);
+    count_states();
+}
+
+void Gateway::count_states() noexcept {
+    uint64_t ok = 0, stale = 0, unknown = 0;
+    for (const InsState& st : states_) {
+        if (st.code == sp_proto::SourceStateCode::Ok) ++ok;
+        else if (st.code == sp_proto::SourceStateCode::Stale) ++stale;
+        else ++unknown;
+    }
+    stats_.instruments_ok.set(ok); stats_.instruments_stale.set(stale); stats_.instruments_unknown.set(unknown);
+}
+
+sp_proto::SourceStateCode Gateway::state(uint32_t instrument_id) const noexcept {
+    for (size_t i = 0; i < states_.size(); ++i) if (ins_.all()[i].id == instrument_id) return states_[i].code;
+    return sp_proto::SourceStateCode::Unknown;
+}
+
+RepublishResult Gateway::republish(uint64_t instrument, uint16_t venue, uint64_t correlation) noexcept {
+    if (venue != 0 && venue != pack_.venue_id) { ++stats_.republish_not_found; return RepublishResult::NOT_FOUND; }
+    bool found = false;
+    for (size_t i = 0; i < states_.size(); ++i) {
+        if (instrument != 0 && ins_.all()[i].id != instrument) continue;
+        found = true;
+        InsState& st = states_[i];
+        st.correlation = correlation;
+        if (!st.queued) { st.queued = true; republish_.push_back(i); }
+    }
+    if (!found) { ++stats_.republish_not_found; return RepublishResult::NOT_FOUND; }
+    ++stats_.republish_queued;
+    return RepublishResult::QUEUED;
+}
+
+void Gateway::republish_one(size_t i, uint64_t now) noexcept {
+    InsState& st = states_[i];
+    st.queued = false;
+    publish_definition(ins_.all()[i], now);
+    for (BookSlot& b : books_) {
+        if (b.idx != i || !b.strategy->synced()) continue;
+        BookEmit e;
+        e.exch_ts = now;
+        if (b.strategy->full_depth()) { e.kind = BookEmit::FULL; emits_.push_back(e); }
+        e.kind = BookEmit::SNAPSHOT;
+        emits_.push_back(e);
+        publish_emits(b, now);
+    }
+    ++stats_.republished;
+    refresh_state(i, sp_proto::SourceReason::Republish, true, st.correlation);
 }
 
 void Gateway::on_connected(uint64_t now) {
     if (rec_) rec_->event(now, "connected");
     ++stats_.connects; stats_.connected.set(1);
+    connected_ = true;
     publish_definitions(now);
     flush();
+    // Instruments without a book are whole from here; books go Ok when they sync.
+    for (size_t i = 0; i < states_.size(); ++i) refresh_state(i, sp_proto::SourceReason::None);
 }
 
 void Gateway::on_disconnected(uint64_t now) {
     if (rec_) rec_->event(now, "disconnected");
     ++stats_.disconnects; stats_.connected.set(0);
+    connected_ = false;
     for (auto& b : books_) b.strategy->on_disconnect();
+    flush();
+    for (size_t i = 0; i < states_.size(); ++i) refresh_state(i, sp_proto::SourceReason::Disconnect);
 }
 
 void Gateway::tick(uint64_t now) {
-    if (opts_.heartbeat_ms && now - last_heartbeat_ >= opts_.heartbeat_ms * 1'000'000ull) publish_heartbeat(now);
+    if (opts_.heartbeat_ms && now - last_heartbeat_ >= opts_.heartbeat_ms * 1'000'000ull) {
+        publish_heartbeat(now);
+        flush();
+        // The beat: the whole source, so late subscribers learn SourceEpoch without asking.
+        publish_state(0, connected_ ? sp_proto::SourceStateCode::Ok : sp_proto::SourceStateCode::Stale, sp_proto::SourceReason::None, 0);
+    }
+    // INTENT: a republish is a burst (a deep book is thousands of messages); one per
+    // interval keeps a "republish all" from flooding subscribers and the gateway's own
+    // live path. At most one per tick, so the tick rate caps it too.
+    if (!republish_.empty() && opts_.republish_per_second && now >= next_republish_) {
+        const size_t i = republish_.front();
+        republish_.pop_front();
+        republish_one(i, now);
+        next_republish_ = now + 1'000'000'000ull / opts_.republish_per_second;
+    }
     if (opts_.definitions_ms && last_definitions_ && now - last_definitions_ >= opts_.definitions_ms * 1'000'000ull) publish_definitions(now);
     for (auto& b : books_) {
         if (b.strategy->take_snapshot_request()) {
@@ -211,19 +327,36 @@ bool Gateway::prepare(std::string_view json) noexcept {
     return true;
 }
 
+void Gateway::publish_book_update(const BookSlot& slot, Side side, Action action, uint8_t level, int64_t px, int64_t qty, uint64_t exch_ts, uint64_t recv_ts) noexcept {
+    uint8_t buf[sp_canonical::BookUpdate::kSize];
+    const CanonicalMessage* m = find_message("BookUpdate");
+    begin_message(buf, *m, slot.ins->id, pack_.venue_id, 0, recv_ts);
+    put_u64(buf, kPrefixExchangeTs, exch_ts);
+    put_i64(buf, find_field(*m, "Price")->offset, px);
+    put_i64(buf, find_field(*m, "Qty")->offset, qty);
+    put(buf, find_field(*m, "Side")->offset, static_cast<uint8_t>(side));
+    put(buf, find_field(*m, "Action")->offset, static_cast<uint8_t>(action));
+    put(buf, find_field(*m, "Level")->offset, level);
+    publish(buf, sizeof buf, stats_.book_updates);
+}
+
 void Gateway::publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept {
     for (const BookEmit& e : emits_) {
         if (e.kind == BookEmit::UPDATE) {
-            uint8_t buf[sp_canonical::BookUpdate::kSize];
-            const CanonicalMessage* m = find_message("BookUpdate");
-            begin_message(buf, *m, slot.ins->id, pack_.venue_id, 0, recv_ts);
-            put_u64(buf, kPrefixExchangeTs, e.exch_ts);
-            put_i64(buf, find_field(*m, "Price")->offset, e.px);
-            put_i64(buf, find_field(*m, "Qty")->offset, e.qty);
-            put(buf, find_field(*m, "Side")->offset, static_cast<uint8_t>(e.side));
-            put(buf, find_field(*m, "Action")->offset, static_cast<uint8_t>(e.action));
-            put(buf, find_field(*m, "Level")->offset, e.level);
-            publish(buf, sizeof buf, stats_.book_updates);
+            publish_book_update(slot, e.side, e.action, e.level, e.px, e.qty, e.exch_ts, recv_ts);
+        } else if (e.kind == BookEmit::FULL) {
+            // INTENT: Clear then every level is the only in-band statement of a whole
+            // book; a top-ten BookSnapshot cannot rebuild depth. Without it, a reader
+            // (and the snapshot service) cannot recover a book after a resync.
+            publish_book_update(slot, Side::Unknown, Action::Clear, 255, 0, 0, e.exch_ts, recv_ts);
+            const Book& bk = slot.strategy->book();
+            for (Side side : {Side::Buy, Side::Sell}) {
+                uint32_t level = 0;
+                bk.for_each(side, [&](int64_t px, int64_t qty) {
+                    publish_book_update(slot, side, Action::Add, level < 10 ? static_cast<uint8_t>(level) : 255, px, qty, e.exch_ts, recv_ts);
+                    ++level;
+                });
+            }
         } else {
             uint8_t buf[sp_canonical::BookSnapshot::kSize];
             const CanonicalMessage* m = find_message("BookSnapshot");
@@ -297,12 +430,15 @@ void Gateway::handle_record(const StreamDef& sd, const Instrument* in, simdjson:
     }
     for (BookSlot& b : books_) {
         if (b.sd != &sd || b.ins != in) continue;
-        if (!b.strategy->on_event(rec, kind, recv_ts, emits_, err)) {
+        const bool applied = b.strategy->on_event(rec, kind, recv_ts, emits_, err);
+        if (!applied) {
             if (!err.empty()) { ++stats_.book_errors; log_error("book", err); }
             emits_.clear();
-            return;
         }
+        const bool whole = has_full(emits_);
         publish_emits(b, recv_ts);
+        // A gap shows as synced() going false; a whole book is a new Ok even when synced() did not change (an in-band resync).
+        refresh_state(b.idx, sp_proto::SourceReason::Gap, whole);
         return;
     }
 }
@@ -396,7 +532,9 @@ void Gateway::on_snapshot(std::string_view venue_symbol, std::string_view body, 
         const bool ok = b.strategy->on_snapshot(obj, recv_ts, emits_, err);
         if (!err.empty()) { ++stats_.book_errors; log_error("snapshot", err); }
         if (ok) ++stats_.snapshots_applied;
+        const bool whole = has_full(emits_);
         publish_emits(b, recv_ts);
+        refresh_state(b.idx, sp_proto::SourceReason::Gap, whole);
     }
     flush();
 }

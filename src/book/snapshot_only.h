@@ -20,12 +20,16 @@ public:
         if (!parse_levels(rec, *r_asks_, rows_, err)) return false;
         for (const LevelRow& l : rows_) book_.apply(Side::Sell, l.px, l.qty);
         emit_snapshot(ts, false, out);
+        synced_ = true;
         return true;
     }
     bool on_snapshot(simdjson::ondemand::object&, uint64_t, std::vector<BookEmit>&, std::string& err) override { err = "snapshot_only takes no REST snapshot"; return false; }
     bool take_snapshot_request() noexcept override { return false; }
-    void on_disconnect() noexcept override { book_.clear(); }
+    void on_disconnect() noexcept override { book_.clear(); synced_ = false; }
+    bool synced() const noexcept override { return synced_; }
+    bool full_depth() const noexcept override { return false; }
 private:
+    bool synced_ = false;
     const FieldMap *r_bids_, *r_asks_, *r_ts_;
     std::vector<LevelRow> rows_;
 };

@@ -20,7 +20,7 @@ public:
     bool on_snapshot(simdjson::ondemand::object& body, uint64_t recv_ts, std::vector<BookEmit>& out, std::string& err) override;
     bool take_snapshot_request() noexcept override;
     void on_disconnect() noexcept override;
-    bool synced() const noexcept { return synced_; }
+    bool synced() const noexcept override { return synced_; }
 
     struct Event {
         uint64_t first_id = 0, last_id = 0, exch_ts = 0;

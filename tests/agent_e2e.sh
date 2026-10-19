@@ -37,7 +37,7 @@ for _ in $(seq 1 150); do http_get "$API" /status >/dev/null 2>&1 && break; slee
 kill -0 $AGENT_PID 2>/dev/null || fail "agent exited early"
 sleep 0.5
 "$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out aeron --channel aeron:ipc --stream-id 1001 --aeron-dir "$ADIR" --replay "$DIR/frames.jsonl" --quiet > "$TMP/gw.log" 2>&1 || fail "gateway exit $?"
-EXPECTED=$(grep -c . "$DIR/expected.txt")
+EXPECTED=$(grep -c -v "^SourceState" "$DIR/expected.txt")   # data messages; SourceState lines are the state stream
 PUBLISHED=$(grep -o "published=[0-9]*" "$TMP/gw.log" | cut -d= -f2)
 [ "$PUBLISHED" = "$EXPECTED" ] || fail "gateway published $PUBLISHED, expected $EXPECTED: $(cat "$TMP/gw.log")"
 RING=/dev/shm/subplane.feedse2e.all.ring

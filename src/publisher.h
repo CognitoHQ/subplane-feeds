@@ -32,6 +32,8 @@ public:
     // The downstream endpoint key for /topology (docs/observability.md), empty when the
     // output is not a stream another service can subscribe to (stdout, null).
     virtual std::string endpoint_key(std::string_view /*host*/) const { return {}; }
+    // The state stream that travels with this output (SPP SourceState), when it has one.
+    virtual Publisher* state_publisher() const noexcept { return nullptr; }
 };
 
 // One line per message: "<Message> iid=<n> seq=<n> ets=<ns> <fields...>", integers only (exact, diffable).
@@ -43,6 +45,17 @@ public:
     std::string describe() const override { return "stdout"; }
 private:
     bool publish_one(const uint8_t* msg, size_t len) noexcept;
+    std::ostream& out_;
+};
+
+// The state stream as text: one line per SPP message, "SourceState iid=<n> venue=<n>
+// seq=<n> state=<Unknown|Stale|Ok> reason=<...> corr=<n> epoch=<n>". Walks u32-length frames.
+class StdoutStatePublisher final : public Publisher {
+public:
+    explicit StdoutStatePublisher(std::ostream& out) : out_(out) {}
+    Offer publish(const uint8_t* msg, size_t len) noexcept override;
+    std::string describe() const override { return "stdout"; }
+private:
     std::ostream& out_;
 };
 
@@ -65,6 +78,7 @@ struct AeronPublisherConfig {
     bool        embedded_driver = false;
     uint64_t    driver_timeout_ms = 10000;
     uint64_t    offer_retry_us = 2000;  // spin on back pressure for this long, then drop
+    int32_t     state_stream_id = 0;    // the SourceState stream on the same channel; 0 = none
 };
 std::unique_ptr<Publisher> make_aeron_publisher(const AeronPublisherConfig& cfg, std::string& err);
 #endif

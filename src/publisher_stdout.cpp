@@ -1,6 +1,7 @@
 #include "publisher.h"
 
 #include "subplane_canonical_views.h"
+#include "subplane_proto_codec.h"
 
 #include <cstdio>
 #include <cstring>
@@ -69,6 +70,39 @@ bool StdoutPublisher::publish_one(const uint8_t* p, size_t len) noexcept {
         return false;
     }
     return true;
+}
+
+namespace {
+const char* state_name(sp_proto::SourceStateCode c) {
+    switch (c) { case sp_proto::SourceStateCode::Unknown: return "Unknown"; case sp_proto::SourceStateCode::Stale: return "Stale"; case sp_proto::SourceStateCode::Ok: return "Ok"; }
+    return "?";
+}
+const char* reason_name(sp_proto::SourceReason r) {
+    switch (r) {
+    case sp_proto::SourceReason::None: return "None"; case sp_proto::SourceReason::Startup: return "Startup"; case sp_proto::SourceReason::Gap: return "Gap";
+    case sp_proto::SourceReason::Disconnect: return "Disconnect"; case sp_proto::SourceReason::Resync: return "Resync"; case sp_proto::SourceReason::Republish: return "Republish";
+    }
+    return "?";
+}
+} // namespace
+
+Offer StdoutStatePublisher::publish(const uint8_t* buf, size_t total) noexcept {
+    size_t off = 0;
+    while (off + 4 <= total) {
+        uint32_t n = 0;
+        std::memcpy(&n, buf + off, 4);
+        off += 4;
+        if (n > total - off) { out_ << "Unknown len=" << (total - off) << '\n'; return Offer::FAILED; }
+        sp_proto::SourceStateDecoder d;
+        if (d.wrap(buf + off, n)) {
+            out_ << "SourceState iid=" << d.Instrument() << " venue=" << d.Venue() << " seq=" << d.Sequence() << " state=" << state_name(d.State())
+                 << " reason=" << reason_name(d.Reason()) << " corr=" << d.CorrelationId() << " epoch=" << d.SourceEpoch() << '\n';
+        } else {
+            out_ << "Unknown len=" << n << '\n';
+        }
+        off += n;
+    }
+    return off == total ? Offer::OK : Offer::FAILED;
 }
 
 } // namespace feeds

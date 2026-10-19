@@ -91,9 +91,9 @@ bool BinanceDiff::apply_snapshot(uint64_t last_id, const std::vector<LevelRow>& 
         ts = ev.exch_ts;
     }
     // Updates emitted before the snapshot would describe a book the reader has
-    // not seen yet; the snapshot states the book, so drop them and emit it last.
+    // not seen yet; the whole book states it, so drop them and emit it last.
     out.clear();
-    emit_snapshot(ts, resynced, out);
+    emit_sync(ts, resynced, out);
     return true;
 }
 

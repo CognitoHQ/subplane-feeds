@@ -18,7 +18,7 @@ bool L2Inband::on_event(simdjson::ondemand::object& rec, std::string_view kind, 
         for (const LevelRow& l : rows_) book_.apply(Side::Sell, l.px, l.qty);
         // INTENT: a snapshot after the first one means the exchange (or a reconnect)
         // restarted the stream; readers see the resync flag and drop their state.
-        emit_snapshot(ts, had_snapshot_, out);
+        emit_sync(ts, had_snapshot_, out);
         if (had_snapshot_) ++resyncs_;
         had_snapshot_ = true;
         synced_ = true;

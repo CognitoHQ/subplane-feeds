@@ -18,7 +18,7 @@ public:
     bool on_snapshot(simdjson::ondemand::object&, uint64_t, std::vector<BookEmit>&, std::string& err) override { err = "l2_inband takes no REST snapshot"; return false; }
     bool take_snapshot_request() noexcept override { return false; }
     void on_disconnect() noexcept override { synced_ = false; book_.clear(); }
-    bool synced() const noexcept { return synced_; }
+    bool synced() const noexcept override { return synced_; }
     uint64_t dropped_before_sync() const noexcept { return dropped_; }
 private:
     const FieldMap *r_bids_, *r_asks_, *r_changes_, *r_ts_;

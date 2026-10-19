@@ -43,8 +43,8 @@ TEST_CASE("binance_diff: buffer, snapshot, apply, then track update ids") {
     CHECK(out.empty());
     CHECK(s.apply_snapshot(160, {{Side::Unknown, 100, 9}, {Side::Unknown, 99, 1}}, {{Side::Unknown, 110, 9}}, out));
     CHECK(s.synced());
-    // Only the snapshot is emitted (the book already reflects the buffered diffs).
-    REQUIRE(out.size() == 1); CHECK(out[0].kind == BookEmit::SNAPSHOT); CHECK_FALSE(out[0].resynced);
+    // Only the whole book and its top-ten snapshot are emitted (the book already reflects the buffered diffs).
+    REQUIRE(out.size() == 2); CHECK(out[0].kind == BookEmit::FULL); CHECK(out[1].kind == BookEmit::SNAPSHOT); CHECK_FALSE(out[1].resynced);
     CHECK(s.book().bids()[0].px == 101); CHECK(s.book().bids()[0].qty == 4);
     CHECK(s.book().bids()[1].qty == 2);     // 100 overwritten by the overlapping event
     CHECK(s.book().asks()[0].qty == 3);
@@ -59,7 +59,7 @@ TEST_CASE("binance_diff: buffer, snapshot, apply, then track update ids") {
     CHECK_FALSE(s.apply_event(ev(170, 171, {}, {}), out));
     CHECK_FALSE(s.synced()); CHECK(s.resyncs() == 1); CHECK(s.take_snapshot_request());
     CHECK(s.apply_snapshot(169, {{Side::Unknown, 100, 1}}, {{Side::Unknown, 110, 1}}, out));
-    REQUIRE(out.size() == 1); CHECK(out[0].resynced);
+    REQUIRE(out.size() == 2); CHECK(out[0].kind == BookEmit::FULL); CHECK(out[0].resynced); CHECK(out[1].resynced);
 }
 
 TEST_CASE("binance_diff: a snapshot older than the buffer asks for another one") {
@@ -89,4 +89,15 @@ TEST_CASE("binance_diff: periodic snapshots and level 255 beyond the top ten") {
     out.clear();
     CHECK(s.apply_event(ev(12, 12, {{Side::Unknown, 1000, 2}, {Side::Unknown, 999, 2}}, {}), out));
     CHECK(count(out, BookEmit::UPDATE) == 2); CHECK(count(out, BookEmit::SNAPSHOT) == 1);   // third update triggers a snapshot
+}
+
+TEST_CASE("Book::for_each walks every level best first, beyond the top ten") {
+    Book b;
+    for (int i = 0; i < 15; ++i) { b.apply(Side::Buy, 100 + i, 1); b.apply(Side::Sell, 200 + i, 2); }
+    std::vector<int64_t> bids, asks;
+    b.for_each(Side::Buy, [&](int64_t px, int64_t qty) { bids.push_back(px); CHECK(qty == 1); });
+    b.for_each(Side::Sell, [&](int64_t px, int64_t qty) { asks.push_back(px); CHECK(qty == 2); });
+    REQUIRE(bids.size() == 15); REQUIRE(asks.size() == 15);
+    CHECK(bids.front() == 114); CHECK(bids.back() == 100);
+    CHECK(asks.front() == 200); CHECK(asks.back() == 214);
 }

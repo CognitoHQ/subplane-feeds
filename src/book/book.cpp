@@ -113,6 +113,13 @@ void BookBase::emit_snapshot(uint64_t ts, bool resynced, std::vector<BookEmit>& 
     updates_since_snapshot_ = 0;
 }
 
+void BookBase::emit_sync(uint64_t ts, bool resynced, std::vector<BookEmit>& out) noexcept {
+    BookEmit e;
+    e.kind = BookEmit::FULL; e.exch_ts = ts; e.resynced = resynced;
+    out.push_back(e);
+    emit_snapshot(ts, resynced, out);
+}
+
 void BookBase::maybe_periodic_snapshot(uint64_t ts, std::vector<BookEmit>& out) noexcept {
     if (snapshot_every_ && updates_since_snapshot_ >= snapshot_every_) emit_snapshot(ts, false, out);
 }

@@ -37,6 +37,10 @@ public:
     size_t depth(Side side) const noexcept { return (side == Side::Buy ? bids_ : asks_).size(); }
     std::vector<Level> bids() const { std::vector<Level> v; top(Side::Buy, SIZE_MAX, v); return v; }   // descending price
     std::vector<Level> asks() const { std::vector<Level> v; top(Side::Sell, SIZE_MAX, v); return v; }  // ascending price
+    // Every level of a side, best first: f(px, qty). No copy, for publishing a whole book.
+    template <class F> void for_each(Side side, F&& f) const {
+        for (const auto& [k, q] : side == Side::Buy ? bids_ : asks_) f(side == Side::Buy ? -k : k, q);
+    }
 private:
     // INTENT: an exchange book holds a thousand levels a side and a depth frame
     // touches a dozen; a sorted vector costs a 16 KB memmove per touch, which was
@@ -48,8 +52,11 @@ private:
     SideMap bids_, asks_;
 };
 
+// UPDATE is one level change; SNAPSHOT is the top ten (BookSnapshot); FULL is the
+// whole book (BookUpdate Clear, then every level as Add, bids then asks, best first),
+// which is what lets a downstream rebuild the book exactly after a (re)sync.
 struct BookEmit {
-    enum Kind : uint8_t { UPDATE, SNAPSHOT } kind;
+    enum Kind : uint8_t { UPDATE, SNAPSHOT, FULL } kind;
     Side     side = Side::Unknown;
     Action   action = Action::Update;
     uint8_t  level = 255;        // 0..9 when within the top ten, else 255
@@ -71,6 +78,11 @@ public:
     // True once per needed snapshot; the gateway then fetches `snapshot_url()`.
     virtual bool take_snapshot_request() noexcept = 0;
     virtual void on_disconnect() noexcept = 0;
+    // True while the book matches the exchange. The gateway turns its changes into SourceState.
+    virtual bool synced() const noexcept = 0;
+    // Whether a (re)sync publishes the whole book (FULL). False when every event is
+    // already the whole book as far as the exchange sends one (snapshot_only).
+    virtual bool full_depth() const noexcept { return true; }
     virtual const Book& book() const noexcept = 0;
     virtual uint64_t resyncs() const noexcept = 0;
 };
@@ -91,6 +103,8 @@ protected:
     explicit BookBase(uint32_t snapshot_every) : snapshot_every_(snapshot_every) {}
     void apply_rows(Side side, const std::vector<LevelRow>& rows, uint64_t ts, std::vector<BookEmit>& out) noexcept; // side overrides Unknown rows
     void emit_snapshot(uint64_t ts, bool resynced, std::vector<BookEmit>& out) noexcept;
+    // The book was (re)built: FULL, then the top-ten SNAPSHOT for readers that only want that.
+    void emit_sync(uint64_t ts, bool resynced, std::vector<BookEmit>& out) noexcept;
     void maybe_periodic_snapshot(uint64_t ts, std::vector<BookEmit>& out) noexcept;
     Book book_;
     uint32_t snapshot_every_;

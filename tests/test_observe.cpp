@@ -96,6 +96,11 @@ TEST_CASE("metrics: identity, counters by venue, drop reasons, edges, histograms
     CHECK(has(m, "subplane_gateway_dropped_total{" + c + R"(,venue="binance-spot",reason="back_pressured"} 0)"));
     CHECK(has(m, "subplane_gateway_connected{" + c + R"(,venue="binance-spot"} 1)"));
     CHECK(has(m, "subplane_gateway_publication_connected{" + c + R"(,venue="binance-spot"} 0)"));
+    // Both instruments have books that never synced: unknown, not stale.
+    CHECK(has(m, "subplane_gateway_instrument_state{" + c + R"(,venue="binance-spot",state="unknown"} 2)"));
+    CHECK(has(m, "subplane_gateway_instrument_state{" + c + R"(,venue="binance-spot",state="ok"} 0)"));
+    CHECK(has(m, "subplane_gateway_republish_requests_total{" + c + R"(,venue="binance-spot",result="queued"} 0)"));
+    CHECK(has(m, "subplane_gateway_state_messages_total{" + c + R"(,venue="binance-spot"} 0)"));
     CHECK(has(m, "# TYPE subplane_gateway_frame_to_offer_seconds histogram"));
     CHECK(has(m, "subplane_gateway_recv_to_offer_seconds_bucket{" + c + R"(,venue="binance-spot",le="+Inf"})"));
     const std::string up = R"(subplane_topology_edge{)" + c + R"(,direction="upstream",role="data",key=")" + url_key(r.pack.connect.url) + R"(",venue="binance-spot"} 1)";

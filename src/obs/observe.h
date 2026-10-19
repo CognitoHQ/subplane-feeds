@@ -58,6 +58,7 @@ private:
     std::string upstream_key_, upstream_describe_;
     std::vector<std::string> recap_keys_;   // distinct REST snapshot endpoints
     std::string downstream_key_;
+    std::string state_key_;                 // the SourceState stream, when the output has one
     bool live_;
 };
 
