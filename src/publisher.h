@@ -94,6 +94,12 @@ struct AeronControlConfig {
     std::string response_control;        // host:port requesters' response subscriptions use as control=
     int32_t     response_stream_id = 1004;
     uint64_t    timeout_ms = 10000;
+    // Replies: the response publication's term length, the largest offer (replies are cut
+    // at message boundaries; a reply may span offers, never interleaving with another
+    // requester's, which has its own publication), and the most held per requester.
+    uint32_t    term_length = 65536;
+    size_t      max_offer = 8192;
+    size_t      max_pending = 64 * 1024;
 };
 std::unique_ptr<ControlInput> make_aeron_control(Publisher& aeron_pub, const AeronControlConfig& cfg, std::string& err);
 #endif

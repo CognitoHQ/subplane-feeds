@@ -164,7 +164,7 @@ public:
         return true;
     }
 
-    int poll(ControlHandler& h, int limit) noexcept override {
+    int poll(SppHandler& h, int limit) noexcept override {
         if (!sub_) return 0;
         h_ = &h; limit_ = limit; fragments_ = 0; ++generation_;
         aeron_subscription_for_each_image(sub_, &AeronControl::on_image, this);
@@ -197,8 +197,8 @@ private:
         aeron_async_add_exclusive_publication_t* async = nullptr;
         aeron_exclusive_publication_t* pub = nullptr;
         std::vector<uint8_t> pending;       // replies not yet offered (the publication connects after the first request)
+        size_t sent = 0;                    // bytes of `pending` already offered
     };
-    static constexpr size_t kMaxPending = 64 * 1024;
 
     static void on_image(aeron_image_t* image, void* clientd) {
         auto* self = static_cast<AeronControl*>(clientd);
@@ -220,15 +220,15 @@ private:
 
     static void on_fragment(void* clientd, const uint8_t* buf, size_t len, aeron_header_t*) {
         auto* p = static_cast<Peer*>(clientd);
-        ControlHandler& h = *p->owner->h_;
+        SppHandler& h = *p->owner->h_;
         const size_t before = p->pending.size();
         h.on_frame(buf, len, p->pending);
-        if (p->pending.size() > kMaxPending) { p->pending.resize(before); ++h.stats().reply_dropped; }
+        if (p->pending.size() - p->sent > p->owner->cfg_.max_pending) { p->pending.resize(before); ++h.stats().reply_dropped; }
     }
 
     void send(Peer& p) noexcept {
         if (!p.pub && !p.async) {
-            const std::string ch = "aeron:udp?control-mode=response|control=" + cfg_.response_control + "|term-length=65536" +
+            const std::string ch = "aeron:udp?control-mode=response|control=" + cfg_.response_control + "|term-length=" + std::to_string(cfg_.term_length) +
                                    "|response-correlation-id=" + std::to_string(p.correlation);
             if (aeron_async_add_exclusive_publication(&p.async, client_, ch.c_str(), cfg_.response_stream_id) < 0) p.async = nullptr;
         }
@@ -236,12 +236,22 @@ private:
             const int rc = aeron_async_add_exclusive_publication_poll(&p.pub, p.async);
             if (rc != 0) p.async = nullptr;   // done, or failed (retried on the next poll)
         }
-        if (!p.pub || p.pending.empty()) return;
-        const int64_t r = aeron_exclusive_publication_offer(p.pub, p.pending.data(), p.pending.size(), nullptr, nullptr);
-        if (r >= 0) { ++h_->stats().replies; p.pending.clear(); return; }
-        if (r == AERON_PUBLICATION_NOT_CONNECTED || r == AERON_PUBLICATION_BACK_PRESSURED || r == AERON_PUBLICATION_ADMIN_ACTION) return;   // next poll
-        ++h_->stats().reply_dropped;
-        p.pending.clear();
+        while (p.pub && p.sent < p.pending.size()) {
+            // Whole messages up to max_offer (a single larger message goes alone).
+            size_t end = p.sent;
+            while (end + 4 <= p.pending.size()) {
+                uint32_t n = 0;
+                std::memcpy(&n, p.pending.data() + end, 4);
+                if (end > p.sent && end + 4 + n - p.sent > cfg_.max_offer) break;
+                end += 4 + n;
+            }
+            const int64_t r = aeron_exclusive_publication_offer(p.pub, p.pending.data() + p.sent, end - p.sent, nullptr, nullptr);
+            if (r >= 0) { ++h_->stats().replies; p.sent = end; continue; }
+            if (r == AERON_PUBLICATION_NOT_CONNECTED || r == AERON_PUBLICATION_BACK_PRESSURED || r == AERON_PUBLICATION_ADMIN_ACTION) return;   // next poll
+            ++h_->stats().reply_dropped;
+            p.sent = p.pending.size();
+        }
+        if (p.sent == p.pending.size()) { p.pending.clear(); p.sent = 0; }
     }
 
     void drop(Peer& p) noexcept {
@@ -255,7 +265,7 @@ private:
     std::string dir_;
     aeron_subscription_t* sub_ = nullptr;
     std::map<int64_t, std::unique_ptr<Peer>> peers_;
-    ControlHandler* h_ = nullptr;
+    SppHandler* h_ = nullptr;
     int limit_ = 0, fragments_ = 0;
     uint64_t generation_ = 0;
 };

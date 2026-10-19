@@ -26,13 +26,22 @@ struct ControlStats {
     OneWriter peers;                                  // gauge: requesters seen (Aeron images)
 };
 
-class ControlHandler {
+// Anything that answers SPP request frames: the gateway's control (below), a
+// snapshot service's recap server.
+class SppHandler {
 public:
-    ControlHandler(Gateway& gw, std::string service_name, uint64_t epoch) : gw_(gw), name_(std::move(service_name)), epoch_(epoch) {}
+    virtual ~SppHandler() = default;
     // One received frame: u32-length-prefixed SPP messages. Appends the replies, framed
     // the same way, to `reply` (one frame per request frame, so replies never interleave).
-    void on_frame(const uint8_t* buf, size_t len, std::vector<uint8_t>& reply) noexcept;
-    ControlStats& stats() noexcept { return stats_; }
+    virtual void on_frame(const uint8_t* buf, size_t len, std::vector<uint8_t>& reply) noexcept = 0;
+    virtual ControlStats& stats() noexcept = 0;
+};
+
+class ControlHandler final : public SppHandler {
+public:
+    ControlHandler(Gateway& gw, std::string service_name, uint64_t epoch) : gw_(gw), name_(std::move(service_name)), epoch_(epoch) {}
+    void on_frame(const uint8_t* buf, size_t len, std::vector<uint8_t>& reply) noexcept override;
+    ControlStats& stats() noexcept override { return stats_; }
     const ControlStats& stats() const noexcept { return stats_; }
 
 private:
@@ -50,7 +59,7 @@ class ControlInput {
 public:
     virtual ~ControlInput() = default;
     // Reads at most `limit` fragments, hands each to `h`, sends the replies. Never blocks.
-    virtual int poll(ControlHandler& h, int limit) noexcept = 0;
+    virtual int poll(SppHandler& h, int limit) noexcept = 0;
     virtual std::string describe() const = 0;
     // The request stream's endpoint key for /topology, empty when it has none.
     virtual std::string endpoint_key(std::string_view /*host*/) const { return {}; }
