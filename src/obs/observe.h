@@ -9,6 +9,7 @@
 // endpoint_key() are documented thread-safe. Reading anything else of the
 // Gateway (its books, its sequence) from here would be a data race.
 
+#include "control.h"
 #include "gateway.h"
 #include "obs/prom_writer.h"
 
@@ -32,8 +33,9 @@ class Observer {
 public:
     // `upstream_url`: the exchange's WebSocket URL, or file://<recording> on replay.
     // `live`: connected to an exchange (REST snapshot endpoints are upstream edges).
+    // `control`, `control_in`: the SPP control input, when there is one.
     Observer(const Gateway& gw, const Pack& pack, const Instruments& ins, const Publisher& pub, Identity id,
-             std::string upstream_url, bool live);
+             std::string upstream_url, bool live, const ControlHandler* control = nullptr, const ControlInput* control_in = nullptr);
 
     std::string metrics_text() const;
     std::string metrics_json() const;
@@ -59,6 +61,8 @@ private:
     std::vector<std::string> recap_keys_;   // distinct REST snapshot endpoints
     std::string downstream_key_;
     std::string state_key_;                 // the SourceState stream, when the output has one
+    const ControlHandler* control_;
+    std::string control_key_, control_describe_;   // the SPP request stream, when there is a control input
     bool live_;
 };
 

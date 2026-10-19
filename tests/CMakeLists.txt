@@ -1,4 +1,4 @@
-add_executable(feeds_test test_main.cpp test_decimal.cpp test_json_path.cpp test_pack.cpp test_book.cpp test_gateway.cpp test_contract.cpp test_observe.cpp)
+add_executable(feeds_test test_main.cpp test_decimal.cpp test_json_path.cpp test_pack.cpp test_book.cpp test_gateway.cpp test_contract.cpp test_observe.cpp test_control.cpp)
 target_link_libraries(feeds_test PRIVATE feeds_core feeds_warnings doctest)
 target_compile_definitions(feeds_test PRIVATE
     FEEDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

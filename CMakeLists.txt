@@ -51,6 +51,7 @@ add_library(feeds_core STATIC
     src/replayer.cpp
     src/recorder.cpp
     src/gateway.cpp
+    src/control.cpp
     src/obs/prom_writer.cpp
     src/obs/endpoint_key.cpp
     src/obs/observe.cpp

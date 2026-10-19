@@ -2,6 +2,8 @@
 
 // Where canonical messages go: Aeron (production) or a text stream (tests, dry runs).
 
+#include "control.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
@@ -81,6 +83,19 @@ struct AeronPublisherConfig {
     int32_t     state_stream_id = 0;    // the SourceState stream on the same channel; 0 = none
 };
 std::unique_ptr<Publisher> make_aeron_publisher(const AeronPublisherConfig& cfg, std::string& err);
+
+// The SPP control input (control.h): a subscription for requests and, per
+// requester, a response publication (an Aeron response channel). UDP only: Aeron
+// response channels need it. On the Aeron publisher's client (`aeron_pub` must
+// come from make_aeron_publisher).
+struct AeronControlConfig {
+    std::string channel;                 // requests, e.g. aeron:udp?endpoint=127.0.0.1:40600
+    int32_t     stream_id = 1003;
+    std::string response_control;        // host:port requesters' response subscriptions use as control=
+    int32_t     response_stream_id = 1004;
+    uint64_t    timeout_ms = 10000;
+};
+std::unique_ptr<ControlInput> make_aeron_control(Publisher& aeron_pub, const AeronControlConfig& cfg, std::string& err);
 #endif
 
 } // namespace feeds

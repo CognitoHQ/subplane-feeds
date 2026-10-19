@@ -4,6 +4,7 @@
 //                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001]
 //                    [--aeron-dir D] [--embedded-driver] [--state-stream 1002] [--record frames.jsonl] [--replay frames.jsonl]
 //                    [--republish-per-second 20] [--source-epoch N]
+//                    [--control-channel aeron:udp?endpoint=H:P --control-response H:P [--control-stream 1003] [--control-response-stream 1004]]
 //                    [--snapshot-every 100] [--batch-bytes 1376] [--heartbeat-ms 1000] [--seconds N] [--subscribe] [--quiet]
 //                    [--http 127.0.0.1:9101] [--instance NAME] [--site S] [--env E] [--labels k=v,...]
 //   spwsgw models        # the canonical messages and fields a pack can target
@@ -44,6 +45,7 @@ void usage() {
     std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
                "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--state-stream N] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
                "                        [--republish-per-second N] [--source-epoch N]\n"
+               "                        [--control-channel C --control-response HOST:PORT [--control-stream N] [--control-response-stream N]]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--spin] [--quiet]\n"
                "                        [--http HOST:PORT] [--instance NAME] [--site S] [--env E] [--labels k=v,...]\n"
                "       spwsgw models\n", stderr);
@@ -102,6 +104,7 @@ int main(int argc, char** argv) {
     const std::set<std::string> valued = {"pack", "registry", "instruments", "symbols", "out", "channel", "stream-id", "aeron-dir", "record", "replay",
                                           "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds",
                                           "state-stream", "republish-per-second", "source-epoch",
+                                          "control-channel", "control-stream", "control-response", "control-response-stream",
                                           "http", "instance", "site", "env", "labels"};
     const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe", "spin"};
     for (int i = 1; i < argc; ++i) {
@@ -181,6 +184,24 @@ int main(int argc, char** argv) {
     }
 
     Gateway gw(pack, instruments, *pub, opts, rec, state_pub);
+    // SPP control (Hello, Republish), polled from the gateway's timer.
+    ControlHandler control_handler(gw, "spwsgw", opts.source_epoch);
+    std::unique_ptr<ControlInput> control;
+    if (a.count("control-channel")) {
+#if FEEDS_WITH_AERON
+        AeronControlConfig cc;
+        cc.channel = a["control-channel"];
+        cc.stream_id = static_cast<int32_t>(getu("control-stream", 1003));
+        cc.response_control = get("control-response", "");
+        cc.response_stream_id = static_cast<int32_t>(getu("control-response-stream", 1004));
+        if (!owned) { std::fputs("spwsgw: --control-channel needs --out aeron\n", stderr); return 2; }
+        control = make_aeron_control(*owned, cc, err);
+        if (!control) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 2; }
+        if (!quiet) std::fprintf(stderr, "spwsgw: control on %s\n", control->describe().c_str());
+#else
+        std::fputs("spwsgw: built without Aeron; --control-channel is unavailable\n", stderr); return 2;
+#endif
+    }
     if (flags.count("subscribe")) { for (const auto& m : gw.subscribe_messages()) std::printf("%s\n", m.c_str()); return 0; }
     if (!quiet) std::fprintf(stderr, "spwsgw: %s, %zu instruments, %zu streams -> %s\n", pack.exchange.c_str(), instruments.all().size(), gw.stream_names().size(), pub->describe().c_str());
 
@@ -205,7 +226,7 @@ int main(int argc, char** argv) {
         id.labels.emplace_back(k, kv.substr(eq + 1));
     }
     const std::string upstream = replaying ? "file://" + std::filesystem::absolute(a["replay"]).lexically_normal().string() : pack.connect.url;
-    const Observer observer(gw, pack, instruments, *pub, id, upstream, !replaying);
+    const Observer observer(gw, pack, instruments, *pub, id, upstream, !replaying, &control_handler, control.get());
 #if FEEDS_WITH_NETWORK
     HttpServer http;
     if (a.count("http")) {
@@ -240,14 +261,20 @@ int main(int argc, char** argv) {
         if (!replay_file(a["replay"], gw, rs, err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 1; }
         if (!quiet) std::fprintf(stderr, "replayed frames=%llu snapshots=%llu events=%llu bad_lines=%llu\n", (unsigned long long)rs.frames, (unsigned long long)rs.snapshots, (unsigned long long)rs.events, (unsigned long long)rs.bad_lines);
         print_stats(gw, stderr);
-#if FEEDS_WITH_NETWORK
-        if (a.count("http")) {
+        if (a.count("http") || control) {
             // Keep serving the final numbers, for tests and for inspecting a replay, until --seconds or a signal.
+            // With a control input the replayed books stay live: heartbeats, Republish and its rate limit run on.
             const uint64_t until = now_ns() + getu("seconds", 0) * 1'000'000'000ull;
-            while (!g_stop && (!a.count("seconds") || now_ns() < until)) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            while (!g_stop && (!a.count("seconds") || now_ns() < until)) {
+                if (control) { control->poll(control_handler, 16); gw.tick(now_ns()); }
+                std::this_thread::sleep_for(std::chrono::milliseconds(control ? 1 : 20));
+            }
+            if (control) print_stats(gw, stderr);
+#if FEEDS_WITH_NETWORK
             http.stop();
-        }
 #endif
+        }
+        if (control) control->close();   // INTENT: before pub->close(): it shares the publisher's Aeron client
         pub->close();
         return rs.bad_lines ? 1 : 0;
     }
@@ -277,6 +304,7 @@ int main(int argc, char** argv) {
         ticker.async_wait([&](boost::system::error_code ec) {
             if (ec) return;
             const uint64_t now = now_ns();
+            if (control) control->poll(control_handler, 16);
             gw.tick(now);
             SnapshotRequest rq;
             while (gw.next_snapshot_request(rq)) {
@@ -303,6 +331,7 @@ int main(int argc, char** argv) {
     }
     print_stats(gw, stderr);
     http.stop();   // INTENT: before close(): the handler reads the publication's connected state
+    if (control) control->close();
     pub->close();
     return 0;
 #else

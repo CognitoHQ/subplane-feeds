@@ -64,8 +64,9 @@ bool Observer::valid_label_name(const std::string& k) {
 }
 
 Observer::Observer(const Gateway& gw, const Pack& pack, const Instruments& ins, const Publisher& pub, Identity id,
-                   std::string upstream_url, bool live)
-    : gw_(gw), pack_(pack), ins_(ins), pub_(pub), id_(std::move(id)), live_(live) {
+                   std::string upstream_url, bool live, const ControlHandler* control, const ControlInput* control_in)
+    : gw_(gw), pack_(pack), ins_(ins), pub_(pub), id_(std::move(id)), control_(control), live_(live) {
+    if (control_in) { control_key_ = control_in->endpoint_key(id_.host); control_describe_ = control_in->describe(); }
     upstream_key_ = url_key(upstream_url);
     upstream_describe_ = (live ? "websocket " : "replay ") + upstream_url;
     if (live) {
@@ -137,6 +138,22 @@ std::string Observer::metrics_text() const {
         w.gauge("subplane_topology_edge", edge_help, {{"direction", "downstream"}, {"role", "data"}, {"key", downstream_key_}, {"venue", pack_.exchange}},
                 pub_.connected() ? 1 : 0);
     }
+    if (control_) {
+        const ControlStats& c = control_->stats();
+        const auto cc = [&](const char* n, const char* help, uint64_t x) { w.counter("subplane_gateway_control_" + std::string(n) + "_total", help, v, x); };
+        cc("frames", "SPP control frames received", c.frames);
+        cc("malformed", "SPP control frames or messages that did not parse", c.malformed);
+        cc("hellos", "SPP Hello messages received", c.hellos);
+        cc("republish", "SPP Republish requests received", c.republish);
+        cc("unsupported", "SPP messages answered Status{Unsupported}", c.unsupported);
+        cc("replies", "SPP reply frames offered to a requester", c.replies);
+        cc("reply_dropped", "SPP reply frames not delivered", c.reply_dropped);
+        w.gauge("subplane_gateway_control_peers", "Requesters connected to the SPP control input", v, static_cast<double>(static_cast<uint64_t>(c.peers)));
+        if (!control_key_.empty()) {
+            w.gauge("subplane_topology_edge", edge_help, {{"direction", "upstream"}, {"role", "recap"}, {"key", control_key_}, {"venue", pack_.exchange}},
+                    c.peers ? 1 : 0);
+        }
+    }
     if (!state_key_.empty()) {
         w.gauge("subplane_topology_edge", edge_help, {{"direction", "downstream"}, {"role", "recap"}, {"key", state_key_}, {"venue", pack_.exchange}},
                 pub_.state_publisher()->connected() ? 1 : 0);
@@ -177,6 +194,11 @@ std::string Observer::topology_json() const {
          ",\"describe\":" + json_str(upstream_describe_) + "}";
     for (const auto& k : recap_keys_) {
         o += ",{\"key\":" + json_str(k) + ",\"role\":\"recap\",\"state\":\"up\",\"local\":" + local + ",\"describe\":\"rest book snapshots\"}";
+    }
+    if (!control_key_.empty()) {
+        // Republish requests come in here (SPP); losing it loses recovery, not data.
+        o += ",{\"key\":" + json_str(control_key_) + ",\"role\":\"recap\",\"state\":" + json_str(control_ && control_->stats().peers ? "up" : "down") +
+             ",\"local\":" + local + ",\"describe\":" + json_str(control_describe_ + " (SPP Republish)") + "}";
     }
     o += "],\"downstream\":[";
     if (!downstream_key_.empty()) {
