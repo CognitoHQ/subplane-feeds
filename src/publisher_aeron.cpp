@@ -1,5 +1,7 @@
 #include "publisher.h"
 
+#include "aeron_io.h"
+
 #include "obs/endpoint_key.h"
 
 #include <aeronc.h>
@@ -17,11 +19,7 @@ namespace {
 
 // INTENT: one Aeron client per process; the state stream is a second exclusive
 // publication on it, owned and closed by the data publisher below.
-std::string resolved_dir(const std::string& configured) {
-    if (!configured.empty()) return configured;
-    char buf[512] = {};
-    return aeron_default_path(buf, sizeof buf) >= 0 ? std::string(buf) : std::string();
-}
+std::string resolved_dir(const std::string& configured) { return aeron_resolved_dir(configured); }
 
 class AeronStatePublication final : public Publisher {
 public:
@@ -50,21 +48,9 @@ public:
     ~AeronPublisher() override { close(); }
 
     bool open(std::string& err) {
-        if (cfg_.embedded_driver) {
-            if (aeron_driver_context_init(&dctx_) < 0) return fail("driver context", err);
-            if (!cfg_.aeron_dir.empty() && aeron_driver_context_set_dir(dctx_, cfg_.aeron_dir.c_str()) < 0) return fail("driver dir", err);
-            aeron_driver_context_set_threading_mode(dctx_, AERON_THREADING_MODE_SHARED);
-            aeron_driver_context_set_dir_delete_on_start(dctx_, true);
-            aeron_driver_context_set_dir_delete_on_shutdown(dctx_, true);
-            if (aeron_driver_init(&driver_, dctx_) < 0) return fail("driver init", err);
-            if (aeron_driver_start(driver_, false) < 0) return fail("driver start", err);
-        }
-        if (aeron_context_init(&ctx_) < 0) return fail("context", err);
-        if (!cfg_.aeron_dir.empty() && aeron_context_set_dir(ctx_, cfg_.aeron_dir.c_str()) < 0) return fail("dir", err);
-        aeron_context_set_driver_timeout_ms(ctx_, cfg_.driver_timeout_ms);
-        aeron_context_set_client_name(ctx_, "spwsgw");
-        if (aeron_init(&client_, ctx_) < 0) return fail("init (is the media driver running?)", err);
-        if (aeron_start(client_) < 0) return fail("start", err);
+        AeronClient::Config cc;
+        cc.aeron_dir = cfg_.aeron_dir; cc.embedded_driver = cfg_.embedded_driver; cc.driver_timeout_ms = cfg_.driver_timeout_ms; cc.client_name = "spwsgw";
+        if (!client_.open(cc, err)) return false;
         if (!add_publication(cfg_.stream_id, pub_, err)) return false;
         if (cfg_.state_stream_id) {
             aeron_exclusive_publication_t* sp = nullptr;
@@ -75,7 +61,7 @@ public:
     }
 
     Publisher* state_publisher() const noexcept override { return state_.get(); }
-    aeron_t* client() const noexcept { return client_; }
+    aeron_t* client() const noexcept { return client_.get(); }
     std::string dir() const { return resolved_dir(cfg_.aeron_dir); }
 
     // INTENT: a gateway never blocks on a slow or absent subscriber. Back pressure
@@ -110,16 +96,13 @@ public:
     void close() noexcept override {
         if (state_) { aeron_exclusive_publication_close(state_->pub_, nullptr, nullptr); state_.reset(); }
         if (pub_) { aeron_exclusive_publication_close(pub_, nullptr, nullptr); pub_ = nullptr; }
-        if (client_) { aeron_close(client_); client_ = nullptr; }
-        if (ctx_) { aeron_context_close(ctx_); ctx_ = nullptr; }
-        if (driver_) { aeron_driver_close(driver_); driver_ = nullptr; }
-        if (dctx_) { aeron_driver_context_close(dctx_); dctx_ = nullptr; }
+        client_.close();
     }
 
 private:
     bool add_publication(int32_t stream_id, aeron_exclusive_publication_t*& out, std::string& err) {
         aeron_async_add_exclusive_publication_t* async = nullptr;
-        if (aeron_async_add_exclusive_publication(&async, client_, cfg_.channel.c_str(), stream_id) < 0) return fail("add publication", err);
+        if (aeron_async_add_exclusive_publication(&async, client_.get(), cfg_.channel.c_str(), stream_id) < 0) return fail("add publication", err);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.driver_timeout_ms);
         while (!out) {
             if (aeron_async_add_exclusive_publication_poll(&out, async) < 0) return fail("publication", err);
@@ -131,10 +114,7 @@ private:
     static bool fail(const char* what, std::string& err) { err = std::string("aeron ") + what + ": " + aeron_errmsg(); return false; }
 
     AeronPublisherConfig cfg_;
-    aeron_driver_context_t* dctx_ = nullptr;
-    aeron_driver_t* driver_ = nullptr;
-    aeron_context_t* ctx_ = nullptr;
-    aeron_t* client_ = nullptr;
+    AeronClient client_;
     aeron_exclusive_publication_t* pub_ = nullptr;
     std::unique_ptr<AeronStatePublication> state_;
 };
@@ -272,12 +252,16 @@ private:
 
 } // namespace
 
+std::unique_ptr<ControlInput> make_aeron_control(aeron_t* client, const std::string& dir, const AeronControlConfig& cfg, std::string& err) {
+    auto c = std::make_unique<AeronControl>(client, cfg, dir);
+    if (!c->open(err)) return nullptr;
+    return c;
+}
+
 std::unique_ptr<ControlInput> make_aeron_control(Publisher& aeron_pub, const AeronControlConfig& cfg, std::string& err) {
     auto* p = dynamic_cast<AeronPublisher*>(&aeron_pub);
     if (!p) { err = "the control input needs the Aeron output (--out aeron)"; return nullptr; }
-    auto c = std::make_unique<AeronControl>(p->client(), cfg, p->dir());
-    if (!c->open(err)) return nullptr;
-    return c;
+    return make_aeron_control(p->client(), p->dir(), cfg, err);
 }
 
 std::unique_ptr<Publisher> make_aeron_publisher(const AeronPublisherConfig& cfg, std::string& err) {

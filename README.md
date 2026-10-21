@@ -66,7 +66,7 @@ streams:
     snapshot: { url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
 ```
 
-The models are the canonical schema (`spwsgw models` lists them); conversions default from each field's kind and the named ones (time formats, enum maps, level layouts) live in `packs/registry.yaml`, so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording).
+The models are the canonical schema (`spwsgw models` lists them); conversions default from each field's kind and the named ones (time formats, enum maps, level layouts) live in `packs/registry.yaml`, so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording). `spwsgw-snap` is the gateway's snapshot service: it rebuilds every instrument from the gateway's stream and answers the agent's recap requests (`docs/snap.md`).
 
 ## Contract with the agent
 

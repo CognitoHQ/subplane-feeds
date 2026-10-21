@@ -52,6 +52,9 @@ add_library(feeds_core STATIC
     src/recorder.cpp
     src/gateway.cpp
     src/control.cpp
+    src/snap/snap.cpp
+    src/snap/recap_server.cpp
+    src/snap/gateway_link.cpp
     src/obs/prom_writer.cpp
     src/obs/endpoint_key.cpp
     src/obs/observe.cpp
@@ -59,7 +62,7 @@ add_library(feeds_core STATIC
 target_include_directories(feeds_core PUBLIC src contract)
 target_link_libraries(feeds_core PUBLIC PkgConfig::YAML_CPP feeds_simdjson Threads::Threads PRIVATE feeds_warnings)
 if(FEEDS_WITH_AERON)
-    target_sources(feeds_core PRIVATE src/publisher_aeron.cpp)
+    target_sources(feeds_core PRIVATE src/publisher_aeron.cpp src/aeron_io.cpp)
     target_link_libraries(feeds_core PUBLIC feeds_aeron)
     target_compile_definitions(feeds_core PUBLIC FEEDS_WITH_AERON=1)
 endif()
@@ -68,6 +71,11 @@ target_compile_definitions(feeds_core PUBLIC FEEDS_VERSION="${PROJECT_VERSION}")
 
 add_executable(spwsgw src/main.cpp)
 target_link_libraries(spwsgw PRIVATE feeds_core feeds_warnings)
+# The snapshot service only speaks Aeron (its gateway's streams and the agent's recap channel).
+if(FEEDS_WITH_AERON)
+    add_executable(spwsgw-snap src/snap_main.cpp)
+    target_link_libraries(spwsgw-snap PRIVATE feeds_core feeds_warnings)
+endif()
 if(FEEDS_WITH_NETWORK)
     find_package(Boost 1.74 REQUIRED)
     find_package(OpenSSL REQUIRED)
