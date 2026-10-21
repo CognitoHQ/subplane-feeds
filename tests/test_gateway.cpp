@@ -298,3 +298,50 @@ TEST_CASE("recovery: republish is queued, rate-limited, joins duplicates and ech
     CHECK(l.back().find("iid=2 venue=10 seq=14 state=Unknown reason=None corr=77") != std::string::npos);
     CHECK(gw.stats().republished == 2); CHECK(gw.stats().republish_queued == 2); CHECK(gw.stats().republish_not_found == 2);
 }
+
+TEST_CASE("recovery: an overflowed book is Stale and resyncs; a repeat within a minute is held off") {
+    StateFixture f("binance-spot", {"BTCUSDT"});
+    for (StreamDef& sd : f.pack.streams) if (!sd.book.empty()) sd.max_levels = 16;
+    GatewayOptions o = quiet(); o.snapshot_every = 0;
+    Gateway gw(f.pack, f.ins, f.pub, o, nullptr, &f.state);
+    gw.on_connected(1);
+    gw.tick(1);
+    SnapshotRequest rq;
+    REQUIRE(gw.next_snapshot_request(rq));
+    std::string big = R"({"lastUpdateId":158,"bids":[)";
+    for (int i = 0; i < 17; ++i) big += (i ? "," : "") + std::string("[\"0.00") + std::to_string(30 + i) + "\",\"1\"]";
+    big += R"(],"asks":[]})";
+    gw.on_snapshot("BTCUSDT", big, 2);
+    CHECK(gw.state(1) != sp_proto::SourceStateCode::Ok);
+    gw.tick(3);
+    CHECK(gw.stats().book_overflows == 1);
+    REQUIRE(gw.next_snapshot_request(rq));            // the first overflow resyncs at once
+    gw.on_snapshot("BTCUSDT", big, 4);
+    gw.tick(5);
+    CHECK(gw.stats().book_overflows == 2);
+    CHECK_FALSE(gw.next_snapshot_request(rq));        // the second, within a minute, waits
+    gw.tick(5 + 61'000'000'000ull);
+    CHECK(gw.next_snapshot_request(rq));
+    CHECK(gw.stats().snapshots_applied == 0);
+}
+
+TEST_CASE("recovery: an overflowed in-band book is Stale and asks for a reconnect") {
+    StateFixture f("coinbase-exchange", {"BTC-USD"});
+    for (StreamDef& sd : f.pack.streams) if (!sd.book.empty()) sd.max_levels = 16;
+    GatewayOptions o = quiet(); o.snapshot_every = 0;
+    Gateway gw(f.pack, f.ins, f.pub, o, nullptr, &f.state);
+    gw.on_connected(1);
+    gw.on_frame(R"({"type":"snapshot","product_id":"BTC-USD","bids":[["100.2","1"]],"asks":[["100.3","2"]]})", 2);
+    CHECK(gw.state(1) == sp_proto::SourceStateCode::Ok);
+    std::string changes;
+    for (int i = 0; i < 16; ++i) changes += (i ? "," : "") + std::string("[\"buy\",\"9") + std::to_string(10 + i) + "\",\"1\"]";
+    gw.on_frame(R"({"type":"l2update","product_id":"BTC-USD","changes":[)" + changes + R"(],"time":"2024-01-02T03:04:07Z"})", 3);
+    CHECK(gw.state(1) == sp_proto::SourceStateCode::Stale);
+    CHECK_FALSE(gw.take_reconnect_request());         // asked from the timer, not the data path
+    gw.tick(4);
+    CHECK(gw.take_reconnect_request());
+    CHECK_FALSE(gw.take_reconnect_request());
+    CHECK(gw.stats().overflow_reconnects == 1);
+    gw.on_frame(R"({"type":"l2update","product_id":"BTC-USD","changes":[["buy","100.2","3"]],"time":"2024-01-02T03:04:08Z"})", 5);
+    CHECK(gw.state(1) == sp_proto::SourceStateCode::Stale);   // updates without a book are dropped
+}

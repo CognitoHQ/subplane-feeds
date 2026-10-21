@@ -169,6 +169,7 @@ WsClient::WsClient(net::io_context& io, WsOptions opts, WsCallbacks cbs) : impl_
 WsClient::~WsClient() { impl_->stop(); }
 void WsClient::start() { impl_->start(); }
 void WsClient::stop() { impl_->stop(); }
+void WsClient::reconnect(const char* why) { if (impl_->connected_) impl_->fail("reconnect", why); }
 bool WsClient::connected() const noexcept { return impl_->connected_; }
 uint64_t WsClient::reconnects() const noexcept { return impl_->reconnects; }
 

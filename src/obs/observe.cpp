@@ -40,6 +40,8 @@ void each_counter(const GatewayStats& s, F&& f) {
     f("connects", "Connections to the exchange established", s.connects);
     f("disconnects", "Connections to the exchange lost or closed", s.disconnects);
     f("resyncs", "Book resynchronisations after a gap, summed over books", s.resyncs);
+    f("book_overflows", "New levels refused because a book side already held max_levels (each a resync)", s.book_overflows);
+    f("overflow_reconnects", "Reconnects to resync an overflowed in-band book", s.overflow_reconnects);
     f("state_messages", "SourceState messages offered on the state stream", s.state_messages);
     f("state_dropped", "SourceState messages the state stream did not take", s.state_dropped);
     f("republished", "Instruments republished in band after a Republish request", s.republished);

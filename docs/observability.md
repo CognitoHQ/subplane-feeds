@@ -98,7 +98,7 @@ Every sample carries `service="spwsgw"`, `instance` and `host`; the gateway's ow
 |---|---|---|---|
 | `subplane_service_info` | gauge | identity, `venue` | always 1 |
 | `subplane_uptime_seconds` | gauge | | seconds since start |
-| `subplane_gateway_<counter>_total` | counter | venue | `frames`, `records`, `acks`, `unmatched_streams`, `unknown_symbols`, `parse_errors`, `map_errors`, `book_errors`, `published`, `offers`, `offer_bytes`, `trades`, `quotes`, `book_updates`, `book_snapshots`, `heartbeats`, `definitions`, `other`, `snapshot_requests`, `snapshots_applied`, `connects`, `disconnects`, `resyncs`, `state_messages`, `state_dropped`, `republished` |
+| `subplane_gateway_<counter>_total` | counter | venue | `frames`, `records`, `acks`, `unmatched_streams`, `unknown_symbols`, `parse_errors`, `map_errors`, `book_errors`, `published`, `offers`, `offer_bytes`, `trades`, `quotes`, `book_updates`, `book_snapshots`, `heartbeats`, `definitions`, `other`, `snapshot_requests`, `snapshots_applied`, `connects`, `disconnects`, `resyncs`, `book_overflows`, `overflow_reconnects`, `state_messages`, `state_dropped`, `republished` |
 | `subplane_gateway_dropped_total` | counter | venue, reason | messages not delivered: `back_pressured` (a subscriber is behind and the retry spin ran out), `not_connected` (nobody subscribes yet), `failed` (publication closed or at its position limit) |
 | `subplane_gateway_connected` | gauge | venue | 1 while connected to the exchange |
 | `subplane_gateway_publication_connected` | gauge | venue | 1 while a subscriber is connected to the output stream |

@@ -2,8 +2,8 @@
 
 namespace feeds {
 
-BinanceDiff::BinanceDiff(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every)
-    : BookBase(snapshot_every),
+BinanceDiff::BinanceDiff(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every, uint32_t max_levels)
+    : BookBase(snapshot_every, max_levels),
       r_first_(pack.role(sd.fields, "first_id")), r_last_(pack.role(sd.fields, "last_id")),
       r_bids_(pack.role(sd.fields, "bids")), r_asks_(pack.role(sd.fields, "asks")), r_ts_(pack.role(sd.fields, "ExchangeTs")),
       s_last_(pack.role(sd.snapshot.fields, "last_id")), s_bids_(pack.role(sd.snapshot.fields, "bids")),
@@ -55,8 +55,13 @@ bool BinanceDiff::apply_event(const Event& ev, std::vector<BookEmit>& out) noexc
         buffer_.push_back(ev);
         return false;
     }
-    apply_rows(Side::Buy, ev.bids, ev.exch_ts, out);
-    apply_rows(Side::Sell, ev.asks, ev.exch_ts, out);
+    // INTENT: an overflow is a level the book could not hold, so it is not the
+    // exchange's book any more: resync exactly as for a gap.
+    if (!apply_rows(Side::Buy, ev.bids, ev.exch_ts, out) || !apply_rows(Side::Sell, ev.asks, ev.exch_ts, out)) {
+        start_resync();
+        buffer_.push_back(ev);   // quantities are absolute: it may bridge to the next snapshot
+        return false;
+    }
     last_u_ = ev.last_id;
     maybe_periodic_snapshot(ev.exch_ts, out);
     return true;
@@ -65,8 +70,7 @@ bool BinanceDiff::apply_event(const Event& ev, std::vector<BookEmit>& out) noexc
 bool BinanceDiff::apply_snapshot(uint64_t last_id, const std::vector<LevelRow>& bids, const std::vector<LevelRow>& asks, std::vector<BookEmit>& out) noexcept {
     request_pending_ = false;
     book_.clear();
-    for (const LevelRow& l : bids) book_.apply(Side::Buy, l.px, l.qty);
-    for (const LevelRow& l : asks) book_.apply(Side::Sell, l.px, l.qty);
+    if (!load(Side::Buy, bids) || !load(Side::Sell, asks)) { start_resync(); return false; }
     // Drop everything the snapshot already contains.
     while (!buffer_.empty() && buffer_.front().last_id <= last_id) buffer_.pop_front();
     if (!buffer_.empty() && buffer_.front().first_id > last_id + 1) {
@@ -85,8 +89,7 @@ bool BinanceDiff::apply_snapshot(uint64_t last_id, const std::vector<LevelRow>& 
     for (const Event& ev : pending) {
         // Buffered events overlapping the snapshot (U <= last_id + 1 <= u) apply in full: quantities are absolute.
         if (ev.first_id > last_u_ + 1) { start_resync(); return false; }
-        apply_rows(Side::Buy, ev.bids, ev.exch_ts, out);
-        apply_rows(Side::Sell, ev.asks, ev.exch_ts, out);
+        if (!apply_rows(Side::Buy, ev.bids, ev.exch_ts, out) || !apply_rows(Side::Sell, ev.asks, ev.exch_ts, out)) { out.clear(); start_resync(); return false; }
         last_u_ = ev.last_id;
         ts = ev.exch_ts;
     }
@@ -98,9 +101,8 @@ bool BinanceDiff::apply_snapshot(uint64_t last_id, const std::vector<LevelRow>& 
 }
 
 bool BinanceDiff::on_event(simdjson::ondemand::object& rec, std::string_view, uint64_t, std::vector<BookEmit>& out, std::string& err) {
-    Event ev;
-    if (!parse_event(rec, ev, err)) return false;
-    return apply_event(ev, out);
+    if (!parse_event(rec, ev_, err)) return false;
+    return apply_event(ev_, out);
 }
 
 bool BinanceDiff::on_snapshot(simdjson::ondemand::object& body, uint64_t, std::vector<BookEmit>& out, std::string& err) {

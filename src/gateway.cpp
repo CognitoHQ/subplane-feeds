@@ -8,6 +8,7 @@
 
 namespace feeds {
 namespace {
+constexpr uint64_t kOverflowHoldNs = 60'000'000'000ull;
 
 void replace_all(std::string& s, std::string_view from, std::string_view to) {
     for (size_t pos = s.find(from); pos != std::string::npos; pos = s.find(from, pos + to.size())) s.replace(pos, from.size(), to);
@@ -305,12 +306,28 @@ void Gateway::tick(uint64_t now) {
     }
     if (opts_.definitions_ms && last_definitions_ && now - last_definitions_ >= opts_.definitions_ms * 1'000'000ull) publish_definitions(now);
     for (auto& b : books_) {
+        // INTENT: an overflow resyncs at once, but one that recurs within a minute means
+        // max_levels is smaller than the exchange's book, and every resync would overflow
+        // again: hold the next one off for a minute rather than hammer the REST endpoint
+        // or the connection. The book stays Stale meanwhile.
+        const uint64_t ov = b.strategy->book().overflows();
+        if (ov != b.overflows_seen) {
+            if (b.last_overflow && now - b.last_overflow < kOverflowHoldNs) b.hold_until = now + kOverflowHoldNs;
+            b.last_overflow = now;
+            b.overflows_seen = ov;
+            log_error("book", b.ins->symbol + ": more than max_levels (" + std::to_string(b.strategy->book().max_levels()) + ") levels on a side; resyncing");
+        }
+        if (now < b.hold_until) continue;
+        if (b.strategy->take_reconnect_request()) { reconnect_ = true; ++stats_.overflow_reconnects; }
         if (b.strategy->take_snapshot_request()) {
             requests_.push_back({b.ins->symbol, expand(b.sd->snapshot.url_tpl, b.ins->stream_symbol, b.ins->symbol, b.sd)});
             ++stats_.snapshot_requests;
         }
     }
     stats_.resyncs.set(resyncs());
+    uint64_t ov = 0;
+    for (const auto& b : books_) ov += b.strategy->book().overflows();
+    stats_.book_overflows.set(ov);
     flush();
 }
 

@@ -2,6 +2,20 @@
 
 #include "doctest.h"
 
+#include <atomic>
+#include <cstdlib>
+#include <new>
+
+// Counts heap allocations while `g_count_allocs` is set, to prove the book's data path makes none.
+namespace { std::atomic<bool> g_count_allocs{false}; std::atomic<size_t> g_allocs{0}; }
+void* operator new(std::size_t n) {
+    if (g_count_allocs.load(std::memory_order_relaxed)) g_allocs.fetch_add(1, std::memory_order_relaxed);
+    if (void* p = std::malloc(n ? n : 1)) return p;
+    throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+
 using namespace feeds;
 
 namespace {
@@ -100,4 +114,64 @@ TEST_CASE("Book::for_each walks every level best first, beyond the top ten") {
     REQUIRE(bids.size() == 15); REQUIRE(asks.size() == 15);
     CHECK(bids.front() == 114); CHECK(bids.back() == 100);
     CHECK(asks.front() == 200); CHECK(asks.back() == 214);
+}
+
+TEST_CASE("Book: levels come from a fixed pool; a full side refuses a new level (overflow)") {
+    Book b(16);
+    CHECK(b.max_levels() == 16);
+    for (int i = 0; i < 16; ++i) CHECK(b.apply(Side::Buy, 100 + i, 1).changed);
+    Book::Result r = b.apply(Side::Buy, 200, 1);      // even a better price: no level is evicted
+    CHECK(r.overflow); CHECK_FALSE(r.changed);
+    CHECK(b.depth(Side::Buy) == 16); CHECK(b.bids()[0].px == 115); CHECK(b.overflows() == 1);
+    CHECK(b.apply(Side::Buy, 100, 9).action == Action::Update);   // existing levels still update
+    CHECK(b.apply(Side::Sell, 300, 1).changed);                   // each side has its own pool
+    CHECK(b.apply(Side::Buy, 105, 0).action == Action::Delete);   // a delete gives its node back
+    r = b.apply(Side::Buy, 200, 1);
+    CHECK(r.changed); CHECK(r.level == 0); CHECK_FALSE(r.overflow);
+    CHECK(Book(3).max_levels() == Book::kMinMaxLevels);
+}
+
+TEST_CASE("Book: apply, delete and clear never allocate once constructed") {
+    Book b(64);
+    g_allocs = 0;
+    g_count_allocs = true;
+    for (int round = 0; round < 3; ++round) {
+        for (int i = 0; i < 64; ++i) { b.apply(Side::Buy, 1000 - i, i + 1); b.apply(Side::Sell, 2000 + i, i + 1); }
+        for (int i = 0; i < 64; i += 2) b.apply(Side::Buy, 1000 - i, 0);
+        for (int i = 0; i < 64; i += 2) b.apply(Side::Buy, 1000 - i, 7);
+        b.apply(Side::Buy, 5, 1);                      // overflow
+        b.clear();
+    }
+    g_count_allocs = false;
+    CHECK(g_allocs == 0);
+    CHECK(b.depth(Side::Buy) == 0);
+}
+
+TEST_CASE("Book: a moved book keeps its levels and its pool") {
+    Book a(16);
+    a.apply(Side::Buy, 100, 1); a.apply(Side::Sell, 101, 2);
+    Book b(std::move(a));
+    REQUIRE(b.bids().size() == 1); CHECK(b.asks()[0].qty == 2);
+    for (int i = 0; i < 15; ++i) CHECK(b.apply(Side::Buy, 50 + i, 1).changed);
+    CHECK(b.apply(Side::Buy, 10, 1).overflow);
+}
+
+TEST_CASE("binance_diff: an overflowing snapshot or diff resyncs instead of publishing a partial book") {
+    Pack p = pack_with_depth();
+    BinanceDiff s(p, depth_stream(p), 0, 16);
+    std::vector<BookEmit> out;
+    CHECK(s.take_snapshot_request());
+    std::vector<LevelRow> bids;
+    for (int i = 0; i < 17; ++i) bids.push_back({Side::Unknown, 100 - i, 1});
+    CHECK_FALSE(s.apply_snapshot(10, bids, {}, out));
+    CHECK_FALSE(s.synced()); CHECK(out.empty());
+    CHECK(s.take_snapshot_request());                 // asks again
+    bids.pop_back();
+    CHECK(s.apply_snapshot(10, bids, {}, out));       // 16 fit
+    CHECK(s.synced());
+    out.clear();
+    CHECK_FALSE(s.apply_event(ev(11, 11, {{Side::Unknown, 200, 1}}, {}), out));   // a 17th level
+    CHECK_FALSE(s.synced()); CHECK(s.book().depth(Side::Buy) == 0);
+    CHECK(s.take_snapshot_request());
+    CHECK(s.book().overflows() == 2);
 }

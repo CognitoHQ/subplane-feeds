@@ -306,6 +306,7 @@ int main(int argc, char** argv) {
             const uint64_t now = now_ns();
             if (control) control->poll(control_handler, 16);
             gw.tick(now);
+            if (gw.take_reconnect_request()) client.reconnect("a book overflowed max_levels; reconnecting for a new snapshot");
             SnapshotRequest rq;
             while (gw.next_snapshot_request(rq)) {
                 const std::string sym = rq.venue_symbol;

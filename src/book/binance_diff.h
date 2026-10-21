@@ -14,7 +14,7 @@ namespace feeds {
 class BinanceDiff final : public BookBase {
 public:
     // `sd` supplies the roles (first_id, last_id, bids, asks, ExchangeTs) and the snapshot roles.
-    BinanceDiff(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every);
+    BinanceDiff(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every, uint32_t max_levels = Book::kDefaultMaxLevels);
 
     bool on_event(simdjson::ondemand::object& rec, std::string_view kind, uint64_t recv_ts, std::vector<BookEmit>& out, std::string& err) override;
     bool on_snapshot(simdjson::ondemand::object& body, uint64_t recv_ts, std::vector<BookEmit>& out, std::string& err) override;
@@ -37,6 +37,7 @@ private:
     const FieldMap *r_first_, *r_last_, *r_bids_, *r_asks_, *r_ts_;
     const FieldMap *s_last_, *s_bids_, *s_asks_;
     std::deque<Event> buffer_;        // events seen while waiting for a snapshot
+    Event ev_;                        // parse target, reused: no allocation per event once its vectors have grown
     bool synced_ = false, request_pending_ = false, snapshot_wanted_ = false;
     uint64_t last_u_ = 0;
     static constexpr size_t kMaxBuffered = 10000;

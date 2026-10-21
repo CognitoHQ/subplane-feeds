@@ -25,21 +25,33 @@ enum class Action : uint8_t { Add = 1, Update = 2, Delete = 3, Clear = 4 };
 
 class Book {
 public:
+    static constexpr uint32_t kDefaultMaxLevels = 5000;   // per side; a pack stream may set `max_levels`
+    static constexpr uint32_t kMinMaxLevels = 16;
+
+    explicit Book(uint32_t max_levels = kDefaultMaxLevels);
+    Book(Book&&) noexcept = default;
+    Book& operator=(Book&&) noexcept = default;
+
     // Applies an absolute quantity at a price (0 deletes). Returns the action and
     // the 0-based level index at which it happened (the former index for deletes),
-    // 255 when deeper than the top ten. `changed` is false when nothing happened
-    // (delete of an absent level).
-    struct Result { Action action; uint32_t level; bool changed; };
+    // 255 when deeper than the top ten. `changed` is false when nothing happened:
+    // a delete of an absent level, or `overflow`, a new level on a side that
+    // already holds max_levels. An overflowed book is no longer the exchange's:
+    // the strategy drops it and resyncs.
+    struct Result { Action action; uint32_t level; bool changed; bool overflow = false; };
     Result apply(Side side, int64_t px, int64_t qty) noexcept;
-    void clear() noexcept { bids_.clear(); asks_.clear(); }
+    void clear() noexcept;
     // The best `max` levels of a side, best first.
     void top(Side side, size_t max, std::vector<Level>& out) const;
-    size_t depth(Side side) const noexcept { return (side == Side::Buy ? bids_ : asks_).size(); }
+    size_t depth(Side side) const noexcept { return (side == Side::Buy ? bids_ : asks_).map.size(); }
+    uint32_t max_levels() const noexcept { return max_levels_; }
+    // New levels refused because their side was full (each one a resync).
+    uint64_t overflows() const noexcept { return overflows_; }
     std::vector<Level> bids() const { std::vector<Level> v; top(Side::Buy, SIZE_MAX, v); return v; }   // descending price
     std::vector<Level> asks() const { std::vector<Level> v; top(Side::Sell, SIZE_MAX, v); return v; }  // ascending price
     // Every level of a side, best first: f(px, qty). No copy, for publishing a whole book.
     template <class F> void for_each(Side side, F&& f) const {
-        for (const auto& [k, q] : side == Side::Buy ? bids_ : asks_) f(side == Side::Buy ? -k : k, q);
+        for (const auto& [k, q] : (side == Side::Buy ? bids_ : asks_).map) f(side == Side::Buy ? -k : k, q);
     }
 private:
     // INTENT: an exchange book holds a thousand levels a side and a depth frame
@@ -47,9 +59,26 @@ private:
     // the whole gateway-to-agent latency for book updates (measured 2026-10-13).
     // A map keyed by signed price (bids negated so both sides iterate best first)
     // makes a touch O(log n), and the level index is only walked up to ten.
+    //
+    // INTENT: no heap on the data path. Each side owns max_levels map nodes, made
+    // once in the constructor and kept as node handles on a free list: a new level
+    // takes one (insert of a node handle never allocates), a delete gives it back
+    // (extract never frees). If a level were inserted by value instead, every new
+    // price would call malloc and every delete free, on the thread that publishes.
+    // A full side refuses the level (overflow) rather than evict one: an evicted
+    // level is a hole the exchange never refills unless that price changes, so the
+    // book would be wrong, identically for every reader, once the price got there.
+    // Size max_levels (per pack stream) for the exchange's whole book.
     using SideMap = std::map<int64_t, int64_t>;
+    struct SideBook {
+        SideMap map;
+        std::vector<SideMap::node_type> free;
+    };
     static int64_t key(Side side, int64_t px) noexcept { return side == Side::Buy ? -px : px; }
-    SideMap bids_, asks_;
+    static void fill(SideBook& sb, uint32_t n);
+    SideBook bids_, asks_;
+    uint32_t max_levels_;
+    uint64_t overflows_ = 0;
 };
 
 // UPDATE is one level change; SNAPSHOT is the top ten (BookSnapshot); FULL is the
@@ -83,6 +112,9 @@ public:
     // Whether a (re)sync publishes the whole book (FULL). False when every event is
     // already the whole book as far as the exchange sends one (snapshot_only).
     virtual bool full_depth() const noexcept { return true; }
+    // True once after the book overflowed on a strategy that can only resync by
+    // reconnecting (the snapshot comes on the socket); the gateway reconnects.
+    virtual bool take_reconnect_request() noexcept { return false; }
     virtual const Book& book() const noexcept = 0;
     virtual uint64_t resyncs() const noexcept = 0;
 };
@@ -100,8 +132,11 @@ public:
     const Book& book() const noexcept override { return book_; }
     uint64_t resyncs() const noexcept override { return resyncs_; }
 protected:
-    explicit BookBase(uint32_t snapshot_every) : snapshot_every_(snapshot_every) {}
-    void apply_rows(Side side, const std::vector<LevelRow>& rows, uint64_t ts, std::vector<BookEmit>& out) noexcept; // side overrides Unknown rows
+    BookBase(uint32_t snapshot_every, uint32_t max_levels) : book_(max_levels), snapshot_every_(snapshot_every) {}
+    // Applies rows and emits their UPDATEs; side overrides Unknown rows. False when the book overflowed (resync it).
+    bool apply_rows(Side side, const std::vector<LevelRow>& rows, uint64_t ts, std::vector<BookEmit>& out) noexcept;
+    // Applies snapshot rows without emitting; false when the book overflowed.
+    bool load(Side side, const std::vector<LevelRow>& rows) noexcept;
     void emit_snapshot(uint64_t ts, bool resynced, std::vector<BookEmit>& out) noexcept;
     // The book was (re)built: FULL, then the top-ten SNAPSHOT for readers that only want that.
     void emit_sync(uint64_t ts, bool resynced, std::vector<BookEmit>& out) noexcept;
@@ -112,6 +147,6 @@ protected:
 };
 
 // The strategy named by `sd.book`; null (with err) for an unknown name.
-std::unique_ptr<BookStrategy> make_strategy(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every, std::string& err);
+std::unique_ptr<BookStrategy> make_strategy(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every, std::string& err);  // book depth: sd.max_levels
 
 } // namespace feeds

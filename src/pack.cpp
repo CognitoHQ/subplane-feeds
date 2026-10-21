@@ -11,7 +11,7 @@ namespace feeds {
 namespace {
 
 const std::set<std::string> kFieldKeys = {"path", "type", "unit", "scale", "map", "levels"};
-const std::set<std::string> kStreamKeys = {"name", "channel", "match", "message", "book", "each", "snapshot_kind", "fields", "snapshot"};
+const std::set<std::string> kStreamKeys = {"name", "channel", "match", "message", "book", "max_levels", "each", "snapshot_kind", "fields", "snapshot"};
 const std::set<std::string> kConnectKeys = {"url", "wrapper", "route", "subscribe", "stream_object", "symbol_case", "reconnect_before_s", "ping"};
 const std::set<std::string> kTopKeys = {"exchange", "venue_id", "registry", "connect", "streams"};
 const std::set<std::string> kStrategies = {"binance_diff", "l2_inband", "snapshot_only"};
@@ -317,6 +317,12 @@ bool Pack::load_text(const std::string& yaml, const Registry& base, Pack& out, s
             sd.snapshot_kind = n["snapshot_kind"].as<std::string>("snapshot");
             sd.message = n["message"].as<std::string>("");
             sd.book = n["book"].as<std::string>("");
+            if (n["max_levels"]) {
+                if (sd.book.empty()) { err = where + ": 'max_levels' is for book streams"; return false; }
+                const int64_t ml = n["max_levels"].as<int64_t>(0);
+                if (ml < 16 || ml > 1'000'000) { err = where + ": 'max_levels' must be 16 to 1000000"; return false; }
+                sd.max_levels = static_cast<uint32_t>(ml);
+            }
             if (sd.message.empty() == sd.book.empty()) { err = where + ": exactly one of 'message' or 'book' is required"; return false; }
             if (n["fields"] && n["fields"].IsMap() && n["fields"].size() > 32) { err = where + ": at most 32 fields per stream"; return false; }
             if (!sd.message.empty()) {

@@ -57,6 +57,7 @@ Placeholders in names and URLs: `{symbol}` (stream case), `{SYMBOL}` (venue spel
 | `each` | A path to an array on the frame: one record per element (Kraken, OKX `data`). Field paths then address the element; a path starting with `$.` addresses the frame (`kind: $.type`). With `route`, the symbol resolves per record unless its path starts with `$.`. |
 | `message` | A canonical message with `fields`: one message per record. |
 | `book` | A strategy with `fields` naming its roles, plus `snapshot: { url, fields }` when it needs one. |
+| `max_levels` | For book streams: the levels a side of each instrument's book holds (16 to 1000000, default 5000). They are allocated once at startup, so the data path never allocates; size it above the exchange's whole book (Coinbase `level2_batch` sends tens of thousands a side). A new level on a full side is an overflow: the book is dropped and resynced, never published with holes (see gateway.md, "Books"). |
 | `snapshot_kind` | For `l2_inband`: the `kind` value that carries a full book (default `snapshot`). |
 
 Exactly one of `message` and `book`. The prefix fields (`InstrumentId`, `VenueId`, `Sequence`, `RecvTs`) are never mapped: the gateway sets them. `ExchangeTs` and `Flags` may be mapped.

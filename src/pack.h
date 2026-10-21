@@ -47,6 +47,7 @@ struct StreamDef {
     const CanonicalMessage* msg = nullptr;
     std::string book;                   // strategy name for book streams; empty = flat
     std::string snapshot_kind = "snapshot";
+    uint32_t    max_levels = 5000;      // book streams: levels a side the book holds; more is an overflow and a resync
     JsonPath    each;                   // records per frame live in this array (frame scope)
     bool        has_each = false;
     std::vector<FieldMap> fields;

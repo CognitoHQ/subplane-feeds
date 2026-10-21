@@ -37,6 +37,8 @@ public:
     ~WsClient();
     void start();
     void stop();
+    // Drops the connection and reconnects after the usual backoff (on_disconnected, then on_connected). io thread.
+    void reconnect(const char* why);
     bool connected() const noexcept;
     uint64_t reconnects() const noexcept;
 private:

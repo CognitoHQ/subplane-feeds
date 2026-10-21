@@ -55,6 +55,8 @@ struct GatewayStats {
     OneWriter connected;               // 1 between on_connected and on_disconnected
     OneWriter last_sequence;           // the last Sequence offered
     OneWriter resyncs;                 // sum over book strategies, refreshed by tick()
+    OneWriter book_overflows;          // new levels refused by a full book (each a resync), summed over books by tick()
+    OneWriter overflow_reconnects;     // reconnects asked for to resync an overflowed in-band book
     OneWriter state_messages, state_dropped;              // SourceState offers, and those not delivered
     OneWriter republish_queued, republish_not_found;      // republish() requests by outcome
     OneWriter republished;                                // instruments republished
@@ -95,9 +97,14 @@ public:
     const LatencyHistogram& recv_to_offer_rt() const noexcept { return lat_rt_; }
     uint64_t sequence() const noexcept { return seq_; }
     uint64_t resyncs() const noexcept;   // gateway thread; other threads read stats().resyncs
+    // True once when an overflowed in-band book needs the connection restarted to get a new snapshot.
+    bool take_reconnect_request() noexcept { const bool r = reconnect_; reconnect_ = false; return r; }
 
 private:
-    struct BookSlot { std::unique_ptr<BookStrategy> strategy; const StreamDef* sd; const Instrument* ins; size_t idx; };
+    struct BookSlot {
+        std::unique_ptr<BookStrategy> strategy; const StreamDef* sd; const Instrument* ins; size_t idx;
+        uint64_t overflows_seen = 0, last_overflow = 0, hold_until = 0;   // overflow resync throttle (tick)
+    };
     struct InsState {
         sp_proto::SourceStateCode code = sp_proto::SourceStateCode::Unknown;
         sp_proto::SourceReason reason = sp_proto::SourceReason::None;
@@ -132,6 +139,7 @@ private:
     Publisher& pub_;
     GatewayOptions opts_;
     Recorder* rec_;
+    bool reconnect_ = false;
     Publisher* state_;
     simdjson::ondemand::parser parser_;
     std::string buf_;                  // frame copy with simdjson padding

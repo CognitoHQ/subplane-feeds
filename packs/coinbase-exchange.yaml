@@ -29,6 +29,7 @@ streams:
   - name: "{symbol}@level2"
     match: [snapshot, l2update]                     # one stream, two frame types
     book: l2_inband                                 # snapshot on the socket, then absolute-size changes
+    max_levels: 65536                               # level2_batch is the whole book: tens of thousands of levels a side
     fields:
       bids: bids                                    # snapshot: [price, size] pairs
       asks: asks

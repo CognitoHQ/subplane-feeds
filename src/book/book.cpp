@@ -7,8 +7,26 @@
 
 namespace feeds {
 
+Book::Book(uint32_t max_levels) : max_levels_(max_levels < kMinMaxLevels ? kMinMaxLevels : max_levels) {
+    fill(bids_, max_levels_);
+    fill(asks_, max_levels_);
+}
+
+// Makes `n` nodes the only way std::map can: insert them, then extract the handles.
+void Book::fill(SideBook& sb, uint32_t n) {
+    sb.free.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) sb.map.emplace_hint(sb.map.end(), static_cast<int64_t>(i), 0);
+    while (!sb.map.empty()) sb.free.push_back(sb.map.extract(sb.map.begin()));
+}
+
+void Book::clear() noexcept {
+    for (SideBook* sb : {&bids_, &asks_})
+        while (!sb->map.empty()) sb->free.push_back(sb->map.extract(sb->map.begin()));   // capacity reserved: no allocation
+}
+
 Book::Result Book::apply(Side side, int64_t px, int64_t qty) noexcept {
-    SideMap& m = side == Side::Buy ? bids_ : asks_;
+    SideBook& sb = side == Side::Buy ? bids_ : asks_;
+    SideMap& m = sb.map;
     const int64_t k = key(side, px);
     auto it = m.lower_bound(k);
     const bool present = it != m.end() && it->first == k;
@@ -18,16 +36,21 @@ Book::Result Book::apply(Side side, int64_t px, int64_t qty) noexcept {
     for (auto j = m.begin(); j != it && idx < 10; ++j) ++idx;
     if (idx >= 10) idx = 255;
     if (present) {
-        if (qty == 0) { m.erase(it); return {Action::Delete, idx, true}; }
+        if (qty == 0) { sb.free.push_back(m.extract(it)); return {Action::Delete, idx, true}; }
         it->second = qty;
         return {Action::Update, idx, true};
     }
-    m.emplace_hint(it, k, qty);
+    if (sb.free.empty()) { ++overflows_; return {Action::Add, idx, false, true}; }
+    SideMap::node_type nh = std::move(sb.free.back());
+    sb.free.pop_back();
+    nh.key() = k;
+    nh.mapped() = qty;
+    m.insert(it, std::move(nh));
     return {Action::Add, idx, true};
 }
 
 void Book::top(Side side, size_t max, std::vector<Level>& out) const {
-    const SideMap& m = side == Side::Buy ? bids_ : asks_;
+    const SideMap& m = (side == Side::Buy ? bids_ : asks_).map;
     out.clear();
     for (auto it = m.begin(); it != m.end() && out.size() < max; ++it) out.push_back(Level{side == Side::Buy ? -it->first : it->first, it->second});
 }
@@ -92,10 +115,11 @@ bool parse_time_role(simdjson::ondemand::object& rec, const FieldMap* role, uint
     return true;
 }
 
-void BookBase::apply_rows(Side side, const std::vector<LevelRow>& rows, uint64_t ts, std::vector<BookEmit>& out) noexcept {
+bool BookBase::apply_rows(Side side, const std::vector<LevelRow>& rows, uint64_t ts, std::vector<BookEmit>& out) noexcept {
     for (const LevelRow& l : rows) {
         const Side s = l.side == Side::Unknown ? side : l.side;
         const Book::Result r = book_.apply(s, l.px, l.qty);
+        if (r.overflow) return false;
         if (!r.changed) continue;
         BookEmit e;
         e.kind = BookEmit::UPDATE; e.side = s; e.action = r.action;
@@ -104,6 +128,12 @@ void BookBase::apply_rows(Side side, const std::vector<LevelRow>& rows, uint64_t
         out.push_back(e);
         ++updates_since_snapshot_;
     }
+    return true;
+}
+
+bool BookBase::load(Side side, const std::vector<LevelRow>& rows) noexcept {
+    for (const LevelRow& l : rows) if (book_.apply(l.side == Side::Unknown ? side : l.side, l.px, l.qty).overflow) return false;
+    return true;
 }
 
 void BookBase::emit_snapshot(uint64_t ts, bool resynced, std::vector<BookEmit>& out) noexcept {
@@ -125,9 +155,9 @@ void BookBase::maybe_periodic_snapshot(uint64_t ts, std::vector<BookEmit>& out) 
 }
 
 std::unique_ptr<BookStrategy> make_strategy(const Pack& pack, const StreamDef& sd, uint32_t snapshot_every, std::string& err) {
-    if (sd.book == "binance_diff") return std::make_unique<BinanceDiff>(pack, sd, snapshot_every);
-    if (sd.book == "l2_inband") return std::make_unique<L2Inband>(pack, sd, snapshot_every);
-    if (sd.book == "snapshot_only") return std::make_unique<SnapshotOnly>(pack, sd, snapshot_every);
+    if (sd.book == "binance_diff") return std::make_unique<BinanceDiff>(pack, sd, snapshot_every, sd.max_levels);
+    if (sd.book == "l2_inband") return std::make_unique<L2Inband>(pack, sd, snapshot_every, sd.max_levels);
+    if (sd.book == "snapshot_only") return std::make_unique<SnapshotOnly>(pack, sd, snapshot_every, sd.max_levels);
     err = "unknown book strategy '" + sd.book + "'";
     return nullptr;
 }
