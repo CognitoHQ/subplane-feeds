@@ -150,7 +150,14 @@ struct Requester {
     static void on_frame(void* cd, const uint8_t* b, size_t n, aeron_header_t*) { static_cast<Requester*>(cd)->frames.emplace_back(b, b + n); }
     static void on_state(void* cd, const uint8_t* b, size_t n, aeron_header_t*) { static_cast<Requester*>(cd)->states.emplace_back(b, b + n); }
     template <class T, class A, class P> static bool wait(T*& out, A* async, P poll) {
-        for (int i = 0; i < 100000 && !out; ++i) { if (poll(&out, async) < 0) return false; sched_yield(); }
+        // INTENT: by time, not by iterations: a loaded CI runner's driver takes longer
+        // than a fixed number of yields (the test failed there at about 100 ms).
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!out && std::chrono::steady_clock::now() < deadline) {
+            if (poll(&out, async) < 0) { MESSAGE("aeron: " << aeron_errmsg()); return false; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!out) MESSAGE("aeron: async add timed out");
         return out != nullptr;
     }
     bool start(const std::string& dir, const std::string& request, const std::string& response) {
