@@ -62,7 +62,7 @@ public:
     bool open(aeron_t* client, std::string channel, int32_t stream_id, uint64_t timeout_ms, std::string& err);
     // Hands at most `limit` fragments' worth of frames to `h`. Never blocks.
     int poll(FrameHandler h, void* ctx, int limit) noexcept;
-    size_t images() const noexcept { return sub_ ? static_cast<size_t>(aeron_subscription_image_count(sub_)) : 0; }
+    size_t images() const noexcept { const int n = sub_ ? aeron_subscription_image_count(sub_) : 0; return n > 0 ? static_cast<size_t>(n) : 0; }
     // Images that went away (publisher gone or timed out). Bumped on Aeron's conductor thread.
     uint64_t images_lost() const noexcept { return lost_.load(std::memory_order_acquire); }
     const std::string& channel() const noexcept { return channel_; }

@@ -219,11 +219,9 @@ int main(int argc, char** argv) {
     id.env = get("env", "");
     id.epoch = started;
     id.pid = static_cast<int32_t>(::getpid());
-    for (const auto& kv : split(get("labels", ""), ',')) {
-        const size_t eq = kv.find('=');
-        const std::string k = kv.substr(0, eq);
-        if (eq == std::string::npos || !Observer::valid_label_name(k)) { std::fprintf(stderr, "spwsgw: --labels: invalid label '%s' (want name=value)\n", kv.c_str()); return 2; }
-        id.labels.emplace_back(k, kv.substr(eq + 1));
+    if (std::string bad; !Observer::parse_labels(get("labels", ""), id.labels, bad)) {
+        std::fprintf(stderr, "spwsgw: --labels: invalid label '%s' (want name=value)\n", bad.c_str());
+        return 2;
     }
     const std::string upstream = replaying ? "file://" + std::filesystem::absolute(a["replay"]).lexically_normal().string() : pack.connect.url;
     const Observer observer(gw, pack, instruments, *pub, id, upstream, !replaying, &control_handler, control.get());

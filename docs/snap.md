@@ -13,6 +13,7 @@ spwsgw-snap --recap-channel aeron:udp?endpoint=SNAPHOST:40500 --recap-response S
             [--recap-stream 1101] [--recap-response-stream 1102] [--gateway-control-stream 1003] [--gateway-response-stream 1004] \
             [--recap-term-length 16777216] [--recap-max-pending 16777216] [--book-levels 5000] [--ask-every-ms 1000] \
             [--name spwsgw-snap] [--aeron-dir D] [--embedded-driver] [--seconds N] [--spin] [--quiet]
+            [--http 127.0.0.1:9102] [--site S] [--env E] [--labels k=v,...]
 ```
 
 - **Data and state:** the gateway's `--channel`, `--stream-id` and `--state-stream`. The state stream is on the same channel.
@@ -20,6 +21,8 @@ spwsgw-snap --recap-channel aeron:udp?endpoint=SNAPHOST:40500 --recap-response S
 - **Gateway control** (optional, but without it nothing is ever republished): the gateway's `--control-channel` and `--control-response`.
 - **`--book-levels`:** at least the gateway's `max_levels` for every book stream. A deeper book overflows here, goes Stale and is asked for again.
 - **`--recap-term-length` and `--recap-max-pending`:** a reply is a whole book, about 100 bytes a level, so both must hold the largest one. The agent's `recap.reply_slab_bytes` (1 MiB by default) bounds what it accepts, about 10,000 levels.
+
+- **`--http`:** `/metrics`, `/metrics?format=json`, `/topology` and `/health` ([observability.md](observability.md), "The snapshot service's metrics"). `--name` is the `instance`. Needs the network build (Boost.Beast), as the gateway's does.
 
 Stats are printed every minute and on exit.
 
@@ -68,10 +71,9 @@ Otherwise `RecapReject{NotReady}` (known but not Ok; the agent retries with back
   - overflow;
   - the reply layout through the vendored decoders;
   - the recap server and the gateway link.
-- `tests/snap_e2e.sh` (ctest `snap_e2e_binance_spot`, needs `-DSUBPLANE_BUILD_DIR`) runs the gateway replay, the agent with a recap partition, and spwsgw-snap. A recap session added after the replay (`POST /reload`) ends with the same book as a session that read the stream from the start, level by level (about 2,000 levels on the Binance fixture).
+- `tests/snap_e2e.sh` (ctest `snap_e2e_binance_spot`, needs `-DSUBPLANE_BUILD_DIR`) runs the gateway replay, the agent with a recap partition, and spwsgw-snap. A recap session added after the replay (`POST /reload`) ends with the same book as a session that read the stream from the start, level by level (about 2,000 levels on the Binance fixture). In a network build it also scrapes the snap's `/metrics` (promtool when `PROMTOOL` is set) and checks that its `/topology` joins the agent's on the recap and data keys.
 
 ## Not yet
 
-- `--http` with `/metrics` and `/topology` (the observability contract).
 - A gateway restart in the end-to-end test (it is covered in `test_snap`).
 - A systemd unit example.

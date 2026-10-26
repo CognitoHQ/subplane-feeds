@@ -58,6 +58,7 @@ add_library(feeds_core STATIC
     src/obs/prom_writer.cpp
     src/obs/endpoint_key.cpp
     src/obs/observe.cpp
+    src/obs/snap_observe.cpp
 )
 target_include_directories(feeds_core PUBLIC src contract)
 target_link_libraries(feeds_core PUBLIC PkgConfig::YAML_CPP feeds_simdjson Threads::Threads PRIVATE feeds_warnings)
@@ -83,8 +84,17 @@ if(FEEDS_WITH_NETWORK)
     target_include_directories(spwsgw SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
     target_link_libraries(spwsgw PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     target_compile_definitions(spwsgw PRIVATE FEEDS_WITH_NETWORK=1)
+    if(FEEDS_WITH_AERON)
+        # The snap's --http uses the gateway's HTTP server.
+        target_sources(spwsgw-snap PRIVATE src/http_server.cpp)
+        target_include_directories(spwsgw-snap SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+        target_compile_definitions(spwsgw-snap PRIVATE FEEDS_WITH_NETWORK=1)
+    endif()
 endif()
 install(TARGETS spwsgw DESTINATION bin)
+if(FEEDS_WITH_AERON)
+    install(TARGETS spwsgw-snap DESTINATION bin)
+endif()
 
 if(FEEDS_BUILD_TESTS)
     enable_testing()

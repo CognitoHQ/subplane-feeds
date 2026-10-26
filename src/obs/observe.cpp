@@ -65,6 +65,21 @@ bool Observer::valid_label_name(const std::string& k) {
     return ok;
 }
 
+bool Observer::parse_labels(const std::string& csv, PromWriter::Labels& out, std::string& bad) {
+    size_t at = 0;
+    while (at <= csv.size()) {
+        const size_t end = std::min(csv.find(',', at), csv.size());
+        const std::string kv = csv.substr(at, end - at);
+        at = end + 1;
+        if (kv.empty()) continue;
+        const size_t eq = kv.find('=');
+        const std::string k = kv.substr(0, eq);
+        if (eq == std::string::npos || !valid_label_name(k)) { bad = kv; return false; }
+        out.emplace_back(k, kv.substr(eq + 1));
+    }
+    return true;
+}
+
 Observer::Observer(const Gateway& gw, const Pack& pack, const Instruments& ins, const Publisher& pub, Identity id,
                    std::string upstream_url, bool live, const ControlHandler* control, const ControlInput* control_in)
     : gw_(gw), pack_(pack), ins_(ins), pub_(pub), id_(std::move(id)), control_(control), live_(live) {
@@ -152,7 +167,7 @@ std::string Observer::metrics_text() const {
         cc("reply_dropped", "SPP reply frames not delivered", c.reply_dropped);
         w.gauge("subplane_gateway_control_peers", "Requesters connected to the SPP control input", v, static_cast<double>(static_cast<uint64_t>(c.peers)));
         if (!control_key_.empty()) {
-            w.gauge("subplane_topology_edge", edge_help, {{"direction", "upstream"}, {"role", "recap"}, {"key", control_key_}, {"venue", pack_.exchange}},
+            w.gauge("subplane_topology_edge", edge_help, {{"direction", "downstream"}, {"role", "recap"}, {"key", control_key_}, {"venue", pack_.exchange}},
                     c.peers ? 1 : 0);
         }
     }
@@ -197,11 +212,6 @@ std::string Observer::topology_json() const {
     for (const auto& k : recap_keys_) {
         o += ",{\"key\":" + json_str(k) + ",\"role\":\"recap\",\"state\":\"up\",\"local\":" + local + ",\"describe\":\"rest book snapshots\"}";
     }
-    if (!control_key_.empty()) {
-        // Republish requests come in here (SPP); losing it loses recovery, not data.
-        o += ",{\"key\":" + json_str(control_key_) + ",\"role\":\"recap\",\"state\":" + json_str(control_ && control_->stats().peers ? "up" : "down") +
-             ",\"local\":" + local + ",\"describe\":" + json_str(control_describe_ + " (SPP Republish)") + "}";
-    }
     o += "],\"downstream\":[";
     if (!downstream_key_.empty()) {
         // INTENT: an Aeron publication knows only whether some subscriber is
@@ -216,6 +226,15 @@ std::string Observer::topology_json() const {
         o += std::string(downstream_key_.empty() ? "" : ",") + "{\"key\":" + json_str(state_key_) + ",\"role\":\"recap\",\"state\":" +
              json_str(sp->connected() ? "up" : "down") + ",\"local\":{\"venue\":" + json_str(pack_.exchange) + "},\"describe\":" +
              json_str(sp->describe() + " (SourceState)") + "}";
+    }
+    if (!control_key_.empty()) {
+        // INTENT: downstream, as the snap's recap channel is: a service lists what it
+        // serves downstream and what it uses upstream, so the requester (spwsgw-snap,
+        // upstream there) joins on this key. Republish requests come in here (SPP);
+        // losing it loses recovery, not data.
+        o += std::string(downstream_key_.empty() && state_key_.empty() ? "" : ",") + "{\"key\":" + json_str(control_key_) +
+             ",\"role\":\"recap\",\"state\":" + json_str(control_ && control_->stats().peers ? "up" : "down") +
+             ",\"local\":{\"venue\":" + json_str(pack_.exchange) + "},\"describe\":" + json_str(control_describe_ + " (SPP Republish)") + "}";
     }
     return o + "]}";
 }

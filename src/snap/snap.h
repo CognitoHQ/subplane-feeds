@@ -25,6 +25,7 @@ struct SnapStats {
     OneWriter requests, replies, rejects_not_ready, rejects_unknown;
     OneWriter republish_asks;                       // instruments (or all) asked for again
     OneWriter instruments_ok, instruments_stale, instruments_unknown;   // gauges
+    OneWriter last_sequence;                        // gauge: last_sequence(), for the HTTP thread
 };
 
 class SnapCore {

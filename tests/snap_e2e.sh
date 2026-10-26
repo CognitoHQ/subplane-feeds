@@ -3,10 +3,12 @@
 # (embedded driver, a recap partition) and spwsgw-snap (untethered, asks the gateway to Republish).
 # A recap session added after the replay (POST /reload) must end with the same book as a session
 # that read the stream from the start, level by level.
-# usage: snap_e2e.sh <spwsgw> <spwsgw-snap> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml> <instrument id>
+# With HTTP=1 (a network build), also scrapes the snap's /metrics and /topology and joins its
+# topology to the agent's on the recap and data keys.
+# usage: snap_e2e.sh <spwsgw> <spwsgw-snap> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml> <instrument id> [HTTP]
 # Skipped (77) without an agent build directory.
 set -u
-GW=$1; SNAP=$2; AGENT_DIR=$3; PACK=$4; DIR=$5; SCHEMA=$6; IID=$7
+GW=$1; SNAP=$2; AGENT_DIR=$3; PACK=$4; DIR=$5; SCHEMA=$6; IID=$7; HTTP=${8:-0}
 [ -n "$AGENT_DIR" ] && [ -x "$AGENT_DIR/subplaned" ] && [ -x "$AGENT_DIR/examples/views_app" ] || { echo "SKIP: no agent build (configure with -DSUBPLANE_BUILD_DIR=...)"; exit 77; }
 AGENT="$AGENT_DIR/subplaned"; APP="$AGENT_DIR/examples/views_app"
 TMP=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"; rm -f /dev/shm/subplane.snape2e.*.ring' EXIT
@@ -62,7 +64,7 @@ kill -0 $AGENT_PID 2>/dev/null || fail "agent exited early"
 
 "$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --recap-channel "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ" --recap-response "127.0.0.1:$RECAP_RSP" \
         --gateway-control "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --gateway-response "127.0.0.1:$CTL_RSP" --recap-term-length 1048576 --ask-every-ms 200 \
-        > "$TMP/snap.log" 2>&1 &
+        $([ "$HTTP" = 1 ] && echo --http 127.0.0.1:0 --site lab) > "$TMP/snap.log" 2>&1 &
 SNAP_PID=$!
 sleep 0.5
 kill -0 $SNAP_PID 2>/dev/null || fail "snap exited early"
@@ -104,6 +106,24 @@ book < "$TMP/late.out" > "$TMP/late.book"
 LEVELS=$(wc -l < "$TMP/live.book")
 [ "$LEVELS" -gt 0 ] || fail "the live session has no book for instrument $IID"
 diff -u "$TMP/live.book" "$TMP/late.book" > "$TMP/book.diff" || fail "the recap session's book differs from the live one: $(head -20 "$TMP/book.diff")"
+if [ "$HTTP" = 1 ]; then
+  SPORT=$(sed -n 's/^spwsgw-snap: http on port \([0-9]*\)$/\1/p' "$TMP/snap.log")
+  [ -n "$SPORT" ] || fail "the snap printed no http port"
+  http_get "$SPORT" /metrics > "$TMP/snap.metrics" || fail "snap /metrics"
+  grep -Eq '^subplane_snap_recap_requests_total\{.*result="reply"\} [1-9]' "$TMP/snap.metrics" || fail "snap metrics: no replies counted"
+  # The gateway has exited by now: once the snap sees its image go, the instrument is Stale, not Ok.
+  grep -Eq '^subplane_snap_instrument_state\{.*state="(ok|stale)"\} 1$' "$TMP/snap.metrics" || fail "snap metrics: the instrument is neither ok nor stale"
+  if [ -n "${PROMTOOL:-}" ]; then $PROMTOOL check metrics < "$TMP/snap.metrics" || fail "promtool"; fi
+  http_get "$SPORT" /topology > "$TMP/snap.topo" || fail "snap /topology"
+  http_get "$API" /topology > "$TMP/agent.topo" || fail "agent /topology"
+  key() { grep -o "\"$1\":\[[^]]*\]" "$2" | grep -o '"key":"[^"]*"' | sed 's/"key":"\(.*\)"/\1/'; }
+  RECAP_KEY=$(key downstream "$TMP/snap.topo")
+  [ -n "$RECAP_KEY" ] || fail "the snap has no downstream recap edge: $(cat "$TMP/snap.topo")"
+  key upstream "$TMP/agent.topo" | grep -qxF "$RECAP_KEY" || fail "the agent's upstream edges do not join the snap's recap key $RECAP_KEY: $(cat "$TMP/agent.topo")"
+  DATA_KEY=$(key upstream "$TMP/snap.topo" | head -1)
+  key upstream "$TMP/agent.topo" | grep -qxF "$DATA_KEY" || fail "the snap and the agent read different data keys: $DATA_KEY"
+  echo "topology joins: recap $RECAP_KEY, data $DATA_KEY"
+fi
 kill -INT $SNAP_PID; wait $SNAP_PID 2>/dev/null
 grep -q "requests=[1-9]" "$TMP/snap.log" || fail "the snap served no request"
 echo "$(tail -1 "$TMP/snap.log")"

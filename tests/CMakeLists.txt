@@ -27,7 +27,7 @@ endforeach()
 if(FEEDS_WITH_AERON)
     add_test(NAME snap_e2e_binance_spot
         COMMAND ${CMAKE_SOURCE_DIR}/tests/snap_e2e.sh $<TARGET_FILE:spwsgw> $<TARGET_FILE:spwsgw-snap> "${SUBPLANE_BUILD_DIR}"
-                ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml 1)
+                ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml 1 $<IF:$<BOOL:${FEEDS_WITH_NETWORK}>,1,0>)
     set_tests_properties(snap_e2e_binance_spot PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 

@@ -46,6 +46,8 @@ public:
     const Identity& identity() const noexcept { return id_; }
     // Identity validation: a label name matches [a-zA-Z_][a-zA-Z0-9_]* and does not start with "__".
     static bool valid_label_name(const std::string& k);
+    // --labels "k=v,...": false with `bad` (the offending item) if a name is invalid or has no '='.
+    static bool parse_labels(const std::string& csv, PromWriter::Labels& out, std::string& bad);
 
 private:
     struct Edge { std::string direction, role, key, describe; };

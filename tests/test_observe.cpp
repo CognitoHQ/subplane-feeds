@@ -2,6 +2,7 @@
 // drop reasons, and the /metrics and /topology documents.
 #include "obs/endpoint_key.h"
 #include "obs/observe.h"
+#include "obs/snap_observe.h"
 
 #include "doctest.h"
 
@@ -153,4 +154,100 @@ TEST_CASE("identity label names follow the Prometheus rules") {
     CHECK_FALSE(Observer::valid_label_name("9a"));
     CHECK_FALSE(Observer::valid_label_name("__x"));
     CHECK_FALSE(Observer::valid_label_name("a-b"));
+}
+
+TEST_CASE("identity labels parse from --labels; a bad item is named") {
+    PromWriter::Labels l;
+    std::string bad;
+    CHECK(Observer::parse_labels("team=md,,desk=a=b", l, bad));
+    REQUIRE(l.size() == 2);
+    CHECK(l[1] == PromWriter::Labels::value_type{"desk", "a=b"});
+    CHECK(Observer::parse_labels("", l, bad));
+    CHECK_FALSE(Observer::parse_labels("team=md,oops", l, bad));
+    CHECK(bad == "oops");
+    CHECK_FALSE(Observer::parse_labels("9x=1", l, bad));
+}
+
+namespace {
+class FakeControl final : public ControlInput {
+public:
+    int poll(SppHandler&, int) noexcept override { return 0; }
+    std::string describe() const override { return "aeron aeron:udp?endpoint=gw:40600 stream 1003"; }
+    std::string endpoint_key(std::string_view) const override { return "aeron-udp://gw:40600#1003"; }
+};
+} // namespace
+
+TEST_CASE("the gateway's control input is a downstream recap edge, so the snap's upstream edge joins it") {
+    Rig r;
+    Gateway gw(r.pack, r.ins, r.pub, Rig::opts());
+    ControlHandler h(gw, "spwsgw", 7);
+    FakeControl in;
+    const Observer o(gw, r.pack, r.ins, r.pub, r.id(), r.pack.connect.url, true, &h, &in);
+    const std::string t = o.topology_json();
+    YAML::Node doc = YAML::Load(t);
+    bool found = false;
+    for (const auto& e : doc["downstream"]) found = found || (e["key"].as<std::string>() == "aeron-udp://gw:40600#1003" && e["role"].as<std::string>() == "recap");
+    CHECK(found);
+    for (const auto& e : doc["upstream"]) CHECK(e["key"].as<std::string>() != "aeron-udp://gw:40600#1003");
+    CHECK(has(o.metrics_text(), R"(direction="downstream",role="recap",key="aeron-udp://gw:40600#1003",venue="binance-spot"} 0)"));
+}
+
+TEST_CASE("snap: metrics and topology from its stats, the gateway upstream and the agents' recap channel downstream") {
+    SnapCore core;
+    ControlStats recap;
+    GatewayLink link("spwsgw-snap", 5);
+    SnapLive live;
+    Identity id;
+    id.service = "spwsgw-snap"; id.instance = "snap1"; id.host = "Box1"; id.version = "0.1.0"; id.epoch = 5; id.pid = 9;
+    id.labels = {{"team", "md"}};
+    SnapEdges e;
+    e.data_key = "aeron-ipc://Box1/dev/shm/aeron-feeds#1001"; e.data_describe = "data";
+    e.state_key = "aeron-ipc://Box1/dev/shm/aeron-feeds#1002"; e.state_describe = "state";
+    e.gateway_key = "aeron-udp://gw:40600#1003"; e.gateway_describe = "gateway";
+    e.recap_key = "aeron-udp://snap-host:40500#1101"; e.recap_describe = "recap";
+    const SnapObserver o(core, recap, &link, live, id, e);
+
+    std::string why;
+    CHECK_FALSE(o.healthy(why));
+    CHECK(has(why, "no data from aeron-ipc://Box1/dev/shm/aeron-feeds#1001"));
+    live.data_images.set(1);
+    live.gateway_connected.set(1);
+    recap.peers.set(2);
+    CHECK(o.healthy(why));
+
+    const std::string m = o.metrics_text();
+    const std::string c = R"(service="spwsgw-snap",instance="snap1",host="Box1")";
+    CHECK(has(m, "subplane_service_info{" + c + R"(,version="0.1.0",epoch="5",site="",env="",team="md"} 1)"));
+    CHECK(has(m, "subplane_snap_gaps_total{" + c + "} 0"));
+    CHECK(has(m, "subplane_snap_recap_requests_total{" + c + R"(,result="not_ready"} 0)"));
+    CHECK(has(m, "subplane_snap_recap_peers{" + c + "} 2"));
+    CHECK(has(m, "subplane_snap_gateway_republish_sent_total{" + c + "} 0"));
+    CHECK(has(m, "subplane_snap_instrument_state{" + c + R"(,state="ok"} 0)"));
+    CHECK(has(m, "subplane_snap_data_connected{" + c + "} 1"));
+    CHECK(has(m, "subplane_snap_state_connected{" + c + "} 0"));
+    CHECK(has(m, R"(direction="upstream",role="data",key="aeron-ipc://Box1/dev/shm/aeron-feeds#1001"} 1)"));
+    CHECK(has(m, R"(direction="upstream",role="recap",key="aeron-ipc://Box1/dev/shm/aeron-feeds#1002"} 0)"));
+    CHECK(has(m, R"(direction="upstream",role="recap",key="aeron-udp://gw:40600#1003"} 1)"));
+    CHECK(has(m, R"(direction="downstream",role="recap",key="aeron-udp://snap-host:40500#1101"} 1)"));
+
+    const std::string t = o.topology_json();
+    CHECK(has(t, R"({"schema":"subplane.topology/1","node":{"id":"Box1/spwsgw-snap/snap1","service":"spwsgw-snap")"));
+    YAML::Node doc = YAML::Load(t);
+    REQUIRE(doc["upstream"].size() == 3);
+    CHECK(doc["upstream"][0]["role"].as<std::string>() == "data");
+    CHECK(doc["upstream"][0]["state"].as<std::string>() == "up");
+    CHECK(doc["upstream"][1]["state"].as<std::string>() == "down");
+    REQUIRE(doc["downstream"].size() == 1);
+    CHECK(doc["downstream"][0]["key"].as<std::string>() == "aeron-udp://snap-host:40500#1101");
+    CHECK(doc["downstream"][0]["state"].as<std::string>() == "up");
+
+    YAML::Node j = YAML::Load(o.metrics_json());
+    CHECK(j["counters"]["gaps"].as<uint64_t>() == 0);
+    CHECK(j["recap"]["peers"].as<uint64_t>() == 2);
+    CHECK(j["gateway"]["connected"].as<bool>());
+
+    // Without --gateway-control: no gateway series and no gateway edge.
+    const SnapObserver bare(core, recap, nullptr, live, id, e);
+    CHECK_FALSE(has(bare.metrics_text(), "subplane_snap_gateway_"));
+    CHECK(YAML::Load(bare.topology_json())["upstream"].size() == 2);
 }

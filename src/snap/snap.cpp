@@ -82,6 +82,7 @@ void SnapCore::on_message(const uint8_t* m, size_t n) noexcept {
         gap_at_ = seq;   // joined mid-stream: everything before is as good as a gap
     }
     last_seq_ = seq;
+    stats_.last_sequence.set(seq);
     const uint16_t tid = u16(m, 2);
     const uint32_t id = u32(m, kPrefixInstrumentId);
     const uint16_t venue = u16(m, kPrefixVenueId);
@@ -188,6 +189,7 @@ void SnapCore::forget_all() noexcept {
     for (auto& [k, in] : insts_) in.whole_at = 0;
     pending_.clear();
     last_seq_ = 0;
+    stats_.last_sequence.set(0);
     gap_at_ = 0;
     ask_all_ = true;
     count_states();
