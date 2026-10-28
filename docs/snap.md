@@ -75,4 +75,5 @@ Otherwise `RecapReject{NotReady}` (known but not Ok; the agent retries with back
   - the recap server and the gateway link.
 - `tests/snap_e2e.sh` (ctest `snap_e2e_binance_spot`, needs `-DSUBPLANE_BUILD_DIR`) runs the gateway replay, the agent with a recap partition, and spwsgw-snap:
   - a recap session added after the replay (`POST /reload`) ends with the same book as a session that read the stream from the start, level by level (about 2,000 levels on the Binance fixture);
-  - then the gateway runs again (a restart: new epoch, `Sequence` from 1). The snap counts one restart, answers NotReady while it rebuilds (the agent retries), and a second recap session again ends with the live session's book. In a network build it also scrapes the snap's `/metrics` (promtool when `PROMTOOL` is set) and checks that its `/topology` joins the agent's on the recap and data keys.
+  - then the gateway runs again (a restart: new epoch, `Sequence` from 1). The snap counts one restart, answers NotReady while it rebuilds (the agent retries), and a second recap session again ends with the live session's book;
+  - in a network build it also scrapes the snap's `/metrics` (promtool when `PROMTOOL` is set) and checks that its `/topology` joins the agent's on the recap and data keys.
