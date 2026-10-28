@@ -2,7 +2,9 @@
 # Recap end to end: gateway (replaying the fixture, control input on) -> Aeron IPC -> subplaned
 # (embedded driver, a recap partition) and spwsgw-snap (untethered, asks the gateway to Republish).
 # A recap session added after the replay (POST /reload) must end with the same book as a session
-# that read the stream from the start, level by level.
+# that read the stream from the start, level by level. Then the gateway runs again (a restart:
+# new epoch, Sequence from 1): the snap forgets, asks again, and a second recap session gets the
+# new epoch's book.
 # With HTTP=1 (a network build), also scrapes the snap's /metrics and /topology and joins its
 # topology to the agent's on the recap and data keys.
 # usage: snap_e2e.sh <spwsgw> <spwsgw-snap> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml> <instrument id> [HTTP]
@@ -19,10 +21,11 @@ BASE=$(( 20000 + (RANDOM % 4000) * 5 ))
 API=$BASE; RECAP_REQ=$((BASE + 1)); RECAP_RSP=$((BASE + 2)); CTL_REQ=$((BASE + 3)); CTL_RSP=$((BASE + 4))
 SOCK="$TMP/ctl.sock"; ADIR="$TMP/aeron"
 
-sessions() {   # $1 = with the late recap session
+sessions() {   # $1 = how many late recap sessions: 0, 1 (late) or 2 (late, again)
   echo "sessions:"
   echo "  - { name: live, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [\"*\"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
-  [ "$1" = yes ] && echo "  - { name: late, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+  [ "$1" -ge 1 ] && echo "  - { name: late, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+  [ "$1" -ge 2 ] && echo "  - { name: again, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
   return 0
 }
 config() {
@@ -56,7 +59,7 @@ metrics: { enabled: false, report_interval_seconds: 60, output_format: json, con
 logging: { level: info, console_output: true, output_format: text }
 YAML
 }
-config no > "$TMP/config.yaml"
+config 0 > "$TMP/config.yaml"
 "$AGENT" --config "$TMP/config.yaml" > "$TMP/agent.log" 2>&1 &
 AGENT_PID=$!
 for _ in $(seq 1 150); do http_get "$API" /status >/dev/null 2>&1 && break; sleep 0.1; done
@@ -70,13 +73,16 @@ sleep 0.5
 kill -0 $SNAP_PID 2>/dev/null || fail "snap exited early"
 
 # The replay, then the gateway keeps answering control (Republish) for the rest of --seconds.
+gateway() {
 "$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out aeron --channel aeron:ipc --stream-id 1001 --aeron-dir "$ADIR" --replay "$DIR/frames.jsonl" \
-      --control-channel "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --control-response "127.0.0.1:$CTL_RSP" --seconds 6 > "$TMP/gw.log" 2>&1 &
+      --control-channel "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --control-response "127.0.0.1:$CTL_RSP" --seconds 6 > "$TMP/gw$1.log" 2>&1 &
 GW_PID=$!
+}
+gateway 1
 sleep 2
 
 # The late recap session joins after everything was published once.
-config yes > "$TMP/config.yaml"
+config 1 > "$TMP/config.yaml"
 http_post "$API" /reload > "$TMP/reload.out" 2>&1 || fail "reload failed: $(cat "$TMP/reload.out")"
 OK=""
 for _ in $(seq 1 50); do
@@ -106,6 +112,29 @@ book < "$TMP/late.out" > "$TMP/late.book"
 LEVELS=$(wc -l < "$TMP/live.book")
 [ "$LEVELS" -gt 0 ] || fail "the live session has no book for instrument $IID"
 diff -u "$TMP/live.book" "$TMP/late.book" > "$TMP/book.diff" || fail "the recap session's book differs from the live one: $(head -20 "$TMP/book.diff")"
+
+# A gateway restart: the same replay again, Sequence from 1 and a new epoch. Its first sync
+# clears and rebuilds the book in band, so the live session ends with the new epoch's book.
+MERGED=$(http_get "$API" /partitions | grep -o '"recap_merged":[0-9]*' | cut -d: -f2)
+gateway 2
+sleep 2
+config 2 > "$TMP/config.yaml"
+http_post "$API" /reload > "$TMP/reload2.out" 2>&1 || fail "second reload failed: $(cat "$TMP/reload2.out")"
+OK=""
+for _ in $(seq 1 50); do
+  P=$(http_get "$API" /partitions)
+  N=$(echo "$P" | grep -o '"recap_merged":[0-9]*' | cut -d: -f2)
+  [ "${N:-0}" -gt "${MERGED:-0}" ] && { OK=1; break; }
+  sleep 0.1
+done
+[ -n "$OK" ] || fail "no recap merged after the gateway restart: $P"
+wait $GW_PID || fail "second gateway exit $?"
+"$APP" /dev/shm/subplane.snape2e.live.ring --from-start --seconds 1 > "$TMP/live2.out" 2>"$TMP/live2.log" || fail "views_app live exit $?"
+"$APP" /dev/shm/subplane.snape2e.again.ring --from-start --seconds 1 > "$TMP/again.out" 2>"$TMP/again.log" || fail "views_app again exit $?"
+book < "$TMP/live2.out" > "$TMP/live2.book"
+book < "$TMP/again.out" > "$TMP/again.book"
+[ -s "$TMP/again.book" ] || fail "the recap session after the restart has no book"
+diff -u "$TMP/live2.book" "$TMP/again.book" > "$TMP/book2.diff" || fail "after the restart the recap session's book differs from the live one: $(head -20 "$TMP/book2.diff")"
 if [ "$HTTP" = 1 ]; then
   SPORT=$(sed -n 's/^spwsgw-snap: http on port \([0-9]*\)$/\1/p' "$TMP/snap.log")
   [ -n "$SPORT" ] || fail "the snap printed no http port"
@@ -126,5 +155,7 @@ if [ "$HTTP" = 1 ]; then
 fi
 kill -INT $SNAP_PID; wait $SNAP_PID 2>/dev/null
 grep -q "requests=[1-9]" "$TMP/snap.log" || fail "the snap served no request"
+grep -q "restarts=1 " "$TMP/snap.log" || fail "the snap did not see exactly one gateway restart: $(tail -1 "$TMP/snap.log")"
+grep -Eq "replies=([2-9]|[1-9][0-9])" "$TMP/snap.log" || fail "the snap did not reply after the restart: $(tail -1 "$TMP/snap.log")"
 echo "$(tail -1 "$TMP/snap.log")"
-echo "PASS: the recap session's book equals the live one ($LEVELS levels)"
+echo "PASS: the recap session's book equals the live one ($LEVELS levels), and again after a gateway restart ($(wc -l < "$TMP/again.book") levels)"

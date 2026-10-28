@@ -1,0 +1,41 @@
+# spwsgw-snap for one gateway (docs/snap.md). One instance per gateway, named as
+# its spwsgw@ instance: `systemctl enable --now spwsgw-snap@binance-spot`.
+# Flags come from /etc/subplane/snap-<instance>.env (example: snap.env.example).
+#
+# With an aeron:ipc data channel the snap must share the gateway's media driver
+# directory (SNAP_AERON_DIR = the gateway's --aeron-dir), so it runs on the
+# gateway's box. It is untethered: stopping or stalling it never holds back the
+# gateway or the agents on its stream.
+
+[Unit]
+Description=subplane snapshot service for gateway %i
+Documentation=https://github.com/satyan-g/subplane-feeds/blob/main/docs/snap.md
+After=network-online.target spwsgw@%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=subplane
+Group=subplane
+EnvironmentFile=/etc/subplane/snap-%i.env
+ExecStart=/usr/local/bin/spwsgw-snap --name snap-%i --aeron-dir ${SNAP_AERON_DIR} \
+    --data-channel ${SNAP_DATA_CHANNEL} --data-stream ${SNAP_DATA_STREAM} --state-stream ${SNAP_STATE_STREAM} \
+    --recap-channel ${SNAP_RECAP_CHANNEL} --recap-response ${SNAP_RECAP_RESPONSE} \
+    --gateway-control ${SNAP_GATEWAY_CONTROL} --gateway-response ${SNAP_GATEWAY_RESPONSE} \
+    --book-levels ${SNAP_BOOK_LEVELS} --http ${SNAP_HTTP} $SNAP_EXTRA
+# SIGTERM: the snap prints its final stats and closes its Aeron resources.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=2
+# Restarting is safe: a new snap starts Unknown, asks the gateway to Republish,
+# and answers NotReady (the agent retries) until it is whole again.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# /dev/shm holds the Aeron driver directory (IPC and the snap's own buffers).
+ReadWritePaths=/dev/shm
+
+[Install]
+WantedBy=multi-user.target

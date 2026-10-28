@@ -26,6 +26,8 @@ spwsgw-snap --recap-channel aeron:udp?endpoint=SNAPHOST:40500 --recap-response S
 
 Stats are printed every minute and on exit.
 
+**Deploying:** `deploy/systemd/spwsgw-snap@.service`, one instance per gateway (`spwsgw-snap@binance-spot`), its flags from `/etc/subplane/snap-<instance>.env` (`deploy/systemd/snap.env.example`). With an `aeron:ipc` data channel the snap shares the gateway's driver directory, so it runs on the gateway's box. Restarting it is safe: it starts Unknown, asks for a Republish, and answers NotReady until it is whole.
+
 ## State per instrument
 
 Each instrument (VenueId, InstrumentId) has a book, its last InstrumentDefinition, Quote, Trade, Status and BookSnapshot, and a state:
@@ -71,9 +73,6 @@ Otherwise `RecapReject{NotReady}` (known but not Ok; the agent retries with back
   - overflow;
   - the reply layout through the vendored decoders;
   - the recap server and the gateway link.
-- `tests/snap_e2e.sh` (ctest `snap_e2e_binance_spot`, needs `-DSUBPLANE_BUILD_DIR`) runs the gateway replay, the agent with a recap partition, and spwsgw-snap. A recap session added after the replay (`POST /reload`) ends with the same book as a session that read the stream from the start, level by level (about 2,000 levels on the Binance fixture). In a network build it also scrapes the snap's `/metrics` (promtool when `PROMTOOL` is set) and checks that its `/topology` joins the agent's on the recap and data keys.
-
-## Not yet
-
-- A gateway restart in the end-to-end test (it is covered in `test_snap`).
-- A systemd unit example.
+- `tests/snap_e2e.sh` (ctest `snap_e2e_binance_spot`, needs `-DSUBPLANE_BUILD_DIR`) runs the gateway replay, the agent with a recap partition, and spwsgw-snap:
+  - a recap session added after the replay (`POST /reload`) ends with the same book as a session that read the stream from the start, level by level (about 2,000 levels on the Binance fixture);
+  - then the gateway runs again (a restart: new epoch, `Sequence` from 1). The snap counts one restart, answers NotReady while it rebuilds (the agent retries), and a second recap session again ends with the live session's book. In a network build it also scrapes the snap's `/metrics` (promtool when `PROMTOOL` is set) and checks that its `/topology` joins the agent's on the recap and data keys.
