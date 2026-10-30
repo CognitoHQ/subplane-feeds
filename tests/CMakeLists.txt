@@ -29,6 +29,11 @@ if(FEEDS_WITH_AERON)
         COMMAND ${CMAKE_SOURCE_DIR}/tests/snap_e2e.sh $<TARGET_FILE:spwsgw> $<TARGET_FILE:spwsgw-snap> "${SUBPLANE_BUILD_DIR}"
                 ${CMAKE_SOURCE_DIR}/packs/binance-spot.yaml ${CMAKE_SOURCE_DIR}/fixtures/binance-spot ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml 1 $<IF:$<BOOL:${FEEDS_WITH_NETWORK}>,1,0>)
     set_tests_properties(snap_e2e_binance_spot PROPERTIES SKIP_RETURN_CODE 77)
+    # The storm: 16 recap sessions on the same 2 instruments reach the snap as 2 requests.
+    add_test(NAME recap_storm_coinbase
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/recap_storm_e2e.sh $<TARGET_FILE:spwsgw> $<TARGET_FILE:spwsgw-snap> "${SUBPLANE_BUILD_DIR}"
+                ${CMAKE_SOURCE_DIR}/packs/coinbase-exchange.yaml ${CMAKE_SOURCE_DIR}/fixtures/coinbase-exchange ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml 65536)
+    set_tests_properties(recap_storm_coinbase PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # The observability HTTP routes (needs the network build for the server).
