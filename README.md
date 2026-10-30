@@ -30,14 +30,15 @@ Every crypto shop rewrites the same layer in Python per process: connect, parse 
 ## Run it
 
 ```bash
-sudo apt install libboost-dev libssl-dev libyaml-cpp-dev   # CMake 3.30+ (see scripts/deps-2204.sh on Ubuntu 22.04)
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+scripts/dev.sh test        # build ./build in the toolchain image (Ubuntu 26.04, GCC 16), then ctest
+# The binaries need 26.04's glibc: on another host, prefix each command with scripts/dev.sh run.
+# On an Ubuntu 26.04 host, sudo scripts/deps-2604.sh installs the toolchain and plain cmake works.
 
 # Dry run against Binance, canonical messages as text:
-build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
+scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
 
 # For real: Aeron IPC into an agent whose partition is `transport: {type: aeron, channel: "aeron:ipc", stream_id: 1001}`
-build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
+scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
 ```
 
 `--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--spin` keeps the core hot between frames (trades and quotes reach the agent in about 1 µs instead of 5). `--batch-bytes N` (default 1376, one Aeron MTU after its header) lets the messages one frame produced share an offer; the batch is flushed when the frame ends, never on a timer. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.

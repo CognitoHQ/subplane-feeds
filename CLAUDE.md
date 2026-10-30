@@ -6,7 +6,7 @@ One binary, `spwsgw`, driven by per-exchange YAML packs (`packs/`). A pack descr
 Only `contract/subplane_canonical.xml` (schema id 100) and its generated header, copied from the agent repo. No shared library. The agent never depends on this repo. The observability contract is copied too: `docs/observability.md` and `contract/topology-keys.json` (the agent's `docs/context/observability.md` and `docs/topology-keys.json`), with `src/obs/prom_writer.*` and `src/obs/endpoint_key.*` as copies of the agent's code; change them in the agent first.
 
 ## Stack
-C++20 (GCC 11, Ubuntu 22.04), CMake 3.30+, `-Werror`. Boost.Beast + OpenSSL (system) for WebSocket/REST, simdjson (fetched, pinned) for JSON, Aeron C client + media driver (fetched, pinned, same as the agent), yaml-cpp (system), doctest vendored.
+C++26 (GCC 16, Ubuntu 26.04), the agent's toolchain (its INV-007), CMake 3.30+, `-Werror`. Build, test and run in the toolchain image with `scripts/dev.sh` (`docker/Dockerfile`), never with the host compiler; CMake refuses GCC older than 16. With `../subplane/build` built by the agent's own `scripts/dev.sh build`, the end-to-end tests run against it. Boost.Beast + OpenSSL (system) for WebSocket/REST, simdjson (fetched, pinned) for JSON, Aeron C client + media driver (fetched, pinned, same as the agent), yaml-cpp (system), doctest vendored.
 
 ## Docs
 `docs/pack-format.md` (the mapping vocabulary), `docs/gateway.md` (threading, book strategies, ids, sequence, heartbeat, recording). Private notes in `.subplane/` (gitignored).

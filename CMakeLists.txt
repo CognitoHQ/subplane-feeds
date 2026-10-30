@@ -1,10 +1,13 @@
 cmake_minimum_required(VERSION 3.30)
 project(subplane_feeds VERSION 0.1.0 LANGUAGES C CXX)
 
-# Same toolchain floor as the agent: C++20, GCC 11 on Ubuntu 22.04.
-set(CMAKE_CXX_STANDARD 20)
+# The agent's toolchain (its INV-007): C++26, GCC 16 on Ubuntu 26.04 (docker/Dockerfile, scripts/dev.sh).
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
+    message(FATAL_ERROR "subplane-feeds needs GCC 16, found ${CMAKE_CXX_COMPILER_VERSION}: build with scripts/dev.sh")
+endif()
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()

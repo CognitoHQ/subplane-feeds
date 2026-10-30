@@ -13,8 +13,10 @@ void* operator new(std::size_t n) {
     if (void* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+// INTENT: noinline, or GCC 16 inlines these into callers whose pointer came from the standard
+// `operator new` and fails the build with -Wmismatched-new-delete (both sides are ours here).
+[[gnu::noinline]] void operator delete(void* p) noexcept { std::free(p); }
+[[gnu::noinline]] void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace feeds;
 
