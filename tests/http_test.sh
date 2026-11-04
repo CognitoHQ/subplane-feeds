@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The observability routes on a real HTTP server: replay a fixture with --http, then
 # scrape /metrics (text and JSON), /topology and /health while the gateway lingers.
-# promtool lints the exposition when PROMTOOL is set (e.g. a docker run line).
+# promtool lints the exposition when installed (always in the toolchain image and CI) or PROMTOOL is set.
 # usage: http_test.sh <spwsgw> <pack.yaml> <fixture dir>
 set -u
 GW=$1; PACK=$2; DIR=$3
@@ -30,9 +30,8 @@ grep -Eq '^subplane_gateway_frames_total\{.*\} [1-9][0-9]*$' "$TMP/m.txt" || fai
 grep -q 'subplane_gateway_dropped_total{.*reason="not_connected"} 0' "$TMP/m.txt" || fail "dropped by reason"
 grep -q 'subplane_gateway_frame_to_offer_seconds_bucket{.*le="+Inf"}' "$TMP/m.txt" || fail "histogram"
 grep -q 'subplane_topology_edge{.*direction="upstream",role="data",key="file://' "$TMP/m.txt" || fail "upstream edge"
-if [ -n "${PROMTOOL:-}" ]; then
-  $PROMTOOL check metrics < "$TMP/m.txt" || fail "promtool"
-fi
+PROMTOOL=${PROMTOOL:-$(command -v promtool || true)}
+if [ -n "$PROMTOOL" ]; then "$PROMTOOL" check metrics < "$TMP/m.txt" || fail "promtool check metrics"; fi
 
 curl -sf "$U/metrics?format=json" | grep -q '"counters":{"frames":' || fail "/metrics?format=json"
 curl -sf "$U/topology" > "$TMP/t.json" || fail "/topology"

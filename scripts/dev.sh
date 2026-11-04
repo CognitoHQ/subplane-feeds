@@ -11,7 +11,6 @@
 #   scripts/dev.sh shell                 interactive shell
 #
 # Every run: --network host (no bridge on UDP/multicast paths), --shm-size=2g (Aeron IPC, rings).
-# PROMTOOL=/path/to/promtool is passed through and its directory mounted read-only.
 # With an agent build in ../subplane/build (its own scripts/dev.sh build), the end-to-end tests
 # use it: CMAKE_ARGS defaults to -DSUBPLANE_BUILD_DIR=../subplane/build.
 set -euo pipefail
@@ -21,7 +20,6 @@ TAG="subplane-feeds-dev:$(cat "$ROOT/docker/Dockerfile" "$ROOT/scripts/deps-2604
 docker image inspect "$TAG" >/dev/null 2>&1 || docker build -q -t "$TAG" -f "$ROOT/docker/Dockerfile" "$ROOT" >/dev/null
 
 opts=(--rm --init --network host --shm-size=2g -v "$SHARE:$SHARE" -w "$ROOT" -e HOME=/tmp)
-if [ -n "${PROMTOOL:-}" ]; then opts+=(-v "$(dirname "$PROMTOOL"):$(dirname "$PROMTOOL"):ro" -e "PROMTOOL=$PROMTOOL"); fi
 [ -t 0 ] && [ -t 1 ] && opts+=(-it)
 [ -z "${CMAKE_ARGS:-}" ] && [ -x "$SHARE/subplane/build/subplaned" ] && CMAKE_ARGS="-DSUBPLANE_BUILD_DIR=$SHARE/subplane/build"
 as_me=(--user "$(id -u):$(id -g)" -e USER="$(id -un)")
@@ -34,5 +32,5 @@ case "$cmd" in
   run)   exec docker run "${opts[@]}" "${as_me[@]}" "$TAG" "$@" ;;
   bench) exec docker run "${opts[@]}" --cap-add SYS_NICE --security-opt seccomp=unconfined "$TAG" "$@" ;;
   shell) exec docker run "${opts[@]}" "${as_me[@]}" "$TAG" bash ;;
-  *) sed -n '2,18p' "$0"; exit 2 ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

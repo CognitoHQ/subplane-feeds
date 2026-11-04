@@ -142,7 +142,14 @@ if [ "$HTTP" = 1 ]; then
   grep -Eq '^subplane_snap_recap_requests_total\{.*result="reply"\} [1-9]' "$TMP/snap.metrics" || fail "snap metrics: no replies counted"
   # The gateway has exited by now: once the snap sees its image go, the instrument is Stale, not Ok.
   grep -Eq '^subplane_snap_instrument_state\{.*state="(ok|stale)"\} 1$' "$TMP/snap.metrics" || fail "snap metrics: the instrument is neither ok nor stale"
-  if [ -n "${PROMTOOL:-}" ]; then $PROMTOOL check metrics < "$TMP/snap.metrics" || fail "promtool"; fi
+  # promtool, when installed (always in the toolchain image and CI): the snap's metrics, and the
+  # agent's with a recap partition, which no agent-side test serves.
+  PROMTOOL=${PROMTOOL:-$(command -v promtool || true)}
+  if [ -n "$PROMTOOL" ]; then
+    "$PROMTOOL" check metrics < "$TMP/snap.metrics" || fail "promtool: snap"
+    http_get "$API" /metrics > "$TMP/agent.metrics" || fail "agent /metrics"
+    "$PROMTOOL" check metrics < "$TMP/agent.metrics" || fail "promtool: agent"
+  fi
   http_get "$SPORT" /topology > "$TMP/snap.topo" || fail "snap /topology"
   http_get "$API" /topology > "$TMP/agent.topo" || fail "agent /topology"
   key() { grep -o "\"$1\":\[[^]]*\]" "$2" | grep -o '"key":"[^"]*"' | sed 's/"key":"\(.*\)"/\1/'; }

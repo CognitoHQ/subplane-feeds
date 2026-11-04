@@ -6,7 +6,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
-apt-get install -y -qq gcc-16 g++-16 cmake make pkg-config libyaml-cpp-dev libboost-dev libssl-dev git ca-certificates uuid-dev curl >/dev/null
+apt-get install -y -qq gcc-16 g++-16 cmake make pkg-config libyaml-cpp-dev libboost-dev libssl-dev git ca-certificates uuid-dev curl promtool >/dev/null
 for t in gcc g++ cc c++; do
   case $t in gcc|cc) v=/usr/bin/gcc-16 ;; *) v=/usr/bin/g++-16 ;; esac
   update-alternatives --install /usr/bin/$t $t $v 100 >/dev/null
