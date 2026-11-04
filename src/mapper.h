@@ -17,7 +17,7 @@ namespace feeds {
 // Tokens of the frame-scope fields of one stream, indexed like StreamDef::fields.
 // Views into the frame buffer or simdjson's string buffer, both of which live until the next frame.
 struct FrameTokens {
-    static constexpr size_t kMax = 32;
+    static constexpr size_t kMax = StreamDef::kMaxFields;   // the pack loader enforces it
     std::string_view text[kMax];
     bool present[kMax] = {};
     void reset(size_t n) noexcept { for (size_t i = 0; i < n && i < kMax; ++i) { text[i] = {}; present[i] = false; } }

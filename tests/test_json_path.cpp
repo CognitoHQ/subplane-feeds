@@ -23,6 +23,7 @@ TEST_CASE("path parsing") {
     CHECK(JsonPath::parse("b.0.1", p, err)); CHECK(p.steps[1].is_index); CHECK(p.steps[2].index == 1);
     CHECK_FALSE(JsonPath::parse("", p, err));
     CHECK_FALSE(JsonPath::parse("a..b", p, err));
+    CHECK(JsonPath::parse("a.b.0.d", p, err)); CHECK(p.steps.size() == JsonPath::kMaxDepth); CHECK(p.steps[3].key == "d");
     CHECK_FALSE(JsonPath::parse("a.b.c.d.e", p, err)); CHECK(err.find("deeper") != std::string::npos);
 }
 

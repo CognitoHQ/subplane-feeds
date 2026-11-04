@@ -50,6 +50,7 @@ struct StreamDef {
     uint32_t    max_levels = 5000;      // book streams: levels a side the book holds; more is an overflow and a resync
     JsonPath    each;                   // records per frame live in this array (frame scope)
     bool        has_each = false;
+    static constexpr size_t kMaxFields = 32;   // FrameTokens holds one token per field
     std::vector<FieldMap> fields;
     SnapshotDef snapshot;
     bool has_snapshot = false;

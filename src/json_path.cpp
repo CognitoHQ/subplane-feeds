@@ -23,7 +23,7 @@ bool JsonPath::parse(std::string_view s, JsonPath& out, std::string& err) {
         } else {
             st.key = std::string(part);
         }
-        out.steps.push_back(std::move(st));
+        out.steps.unchecked_push_back(std::move(st));   // depth checked above
         start = dot + 1;
         if (dot == s.size()) break;
     }

@@ -324,7 +324,6 @@ bool Pack::load_text(const std::string& yaml, const Registry& base, Pack& out, s
                 sd.max_levels = static_cast<uint32_t>(ml);
             }
             if (sd.message.empty() == sd.book.empty()) { err = where + ": exactly one of 'message' or 'book' is required"; return false; }
-            if (n["fields"] && n["fields"].IsMap() && n["fields"].size() > 32) { err = where + ": at most 32 fields per stream"; return false; }
             if (!sd.message.empty()) {
                 sd.msg = find_message(sd.message);
                 if (!sd.msg) { err = where + ": unknown canonical message '" + sd.message + "'"; return false; }
@@ -354,6 +353,7 @@ bool Pack::load_text(const std::string& yaml, const Registry& base, Pack& out, s
                 } else if (n["snapshot"]) { err = where + ": strategy " + sd.book + " takes no 'snapshot' block"; return false; }
                 if (sd.book == "l2_inband" && !role(sd.fields, "bids") && !role(sd.fields, "changes")) { err = where + ": l2_inband needs 'bids'/'asks' or 'changes'"; return false; }
             }
+            if (sd.fields.size() > StreamDef::kMaxFields) { err = where + ": at most " + std::to_string(StreamDef::kMaxFields) + " fields per stream"; return false; }
             for (const auto& other : out.streams)
                 if (other.prefix == sd.prefix && other.suffix == sd.suffix) { err = where + ": duplicate stream name " + sd.name_tpl; return false; }
             out.streams.push_back(std::move(sd));

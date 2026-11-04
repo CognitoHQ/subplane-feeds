@@ -8,9 +8,9 @@
 #include <simdjson.h>
 
 #include <cstdint>
+#include <inplace_vector>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace feeds {
 
@@ -22,7 +22,7 @@ struct PathStep {
 
 struct JsonPath {
     static constexpr size_t kMaxDepth = 4;
-    std::vector<PathStep> steps;
+    std::inplace_vector<PathStep, kMaxDepth> steps;   // in place: walk() runs per field per frame
     std::string text;
 
     static bool parse(std::string_view s, JsonPath& out, std::string& err);
