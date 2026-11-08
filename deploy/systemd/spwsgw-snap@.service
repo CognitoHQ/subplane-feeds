@@ -9,7 +9,7 @@
 
 [Unit]
 Description=subplane snapshot service for gateway %i
-Documentation=https://github.com/satyan-g/subplane-feeds/blob/main/docs/snap.md
+Documentation=https://github.com/CognitoHQ/subplane-feeds/blob/main/docs/snap.md
 After=network-online.target spwsgw@%i.service
 Wants=network-online.target
 

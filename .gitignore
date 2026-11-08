@@ -5,3 +5,6 @@ build/
 .venv/
 # Private notes
 .subplane/
+
+# Local build logs
+*.log

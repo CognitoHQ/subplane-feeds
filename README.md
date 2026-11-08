@@ -1,6 +1,6 @@
 # subplane-feeds
 
-Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/satyan-g/subplane) agent. One `spwsgw` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
+Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/CognitoHQ/subplane) agent. One `spwsgw` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
 
 ```
                      exchange box                               the application box
