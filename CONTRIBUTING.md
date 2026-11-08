@@ -24,7 +24,7 @@ what is built and what is planned.
 
 subplane-feeds is licensed under the Apache License 2.0 (see `LICENSE`).
 Before a first contribution is merged, its author signs the Individual
-Contributor License Agreement (`CLA.md`); the CLA Assistant bot asks on the
-pull request, and signing once covers every later contribution to subplane and
-subplane-feeds. If your employer has rights to what you write, it signs the
-Corporate CLA (`CLA-corporate.md`) first.
+Contributor License Agreement (`CLA.md`) by adding a row to
+`CLA-signatures.md` in their pull request; CI checks that the author of every
+pull request has one. If your employer has rights to what you write, it signs
+the Corporate CLA (`CLA-corporate.md`) first.
