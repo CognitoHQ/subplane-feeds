@@ -87,10 +87,4 @@ Each pack has a recorded fixture (`fixtures/<pack>/`) replayed byte-for-byte in 
 
 ## Licence
 
-Source-available under the [Functional Source License 1.1, Apache-2.0 future licence](https://fsl.software/) (FSL-1.1-ALv2). In short:
-
-- **Free for any use except competing with it:** run it in production inside your firm, modify it, use it for research, teaching or consulting work.
-- **Not allowed without our consent:** selling it, or offering it (or something substantially like it) as a commercial product or service.
-- **Each release becomes Apache-2.0** two years after it ships.
-
-For anything the licence does not cover, open an issue titled "Licence request" (no details needed); licences are granted case by case. See `LICENSE` and `NOTICE`; contribution guidelines and the CLA are in `CONTRIBUTING.md`.
+Apache License 2.0 (see `LICENSE` and `NOTICE`): use, modify and ship the gateways as you like. The agent they feed, [subplane](https://github.com/CognitoHQ/subplane), is source-available under FSL-1.1-ALv2, with its app contract (the canonical schema and views copied into `contract/`) under Apache-2.0. Contribution guidelines and the CLA are in `CONTRIBUTING.md`.
