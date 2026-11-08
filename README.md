@@ -85,4 +85,12 @@ For data, only two things: `contract/subplane_canonical.xml` (schema id 100) wit
 
 Each pack has a recorded fixture (`fixtures/<pack>/`) replayed byte-for-byte in `ctest`, and the same replay runs end to end through a local agent build (`-DSUBPLANE_BUILD_DIR=...`): gateway, Aeron IPC, `subplaned`, ring, `views_app`. All recorded live on 2026-10-13 with zero mapping, book or parse errors and zero resyncs.
 
-Licence: Apache-2.0.
+## Licence
+
+Source-available under the [Functional Source License 1.1, Apache-2.0 future licence](https://fsl.software/) (FSL-1.1-ALv2). In short:
+
+- **Free for any use except competing with it:** run it in production inside your firm, modify it, use it for research, teaching or consulting work.
+- **Not allowed without our consent:** selling it, or offering it (or something substantially like it) as a commercial product or service.
+- **Each release becomes Apache-2.0** two years after it ships.
+
+For anything the licence does not cover, open an issue titled "Licence request" (no details needed); licences are granted case by case. See `LICENSE` and `NOTICE`; contribution guidelines and the CLA are in `CONTRIBUTING.md`.
