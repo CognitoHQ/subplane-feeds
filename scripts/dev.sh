@@ -10,7 +10,9 @@
 #                                        SCHED_FIFO runs (host: sched_rt_runtime_us=-1)
 #   scripts/dev.sh shell                 interactive shell
 #
-# Every run: --network host (no bridge on UDP/multicast paths), --shm-size=2g (Aeron IPC, rings).
+# Every run shares the host's network (no bridge on UDP/multicast paths), /dev/shm (rings, Aeron IPC)
+# and /tmp (control sockets, configs), so processes in separate dev.sh runs, one per terminal, see
+# each other as they would on the host. Fixed paths there are shared too: run one test suite at a time.
 # With an agent build in ../subplane/build (its own scripts/dev.sh build), the end-to-end tests
 # use it: CMAKE_ARGS defaults to -DSUBPLANE_BUILD_DIR=../subplane/build.
 set -euo pipefail
@@ -19,7 +21,10 @@ SHARE="$(dirname "$ROOT")"
 TAG="subplane-feeds-dev:$(cat "$ROOT/docker/Dockerfile" "$ROOT/scripts/deps-2604.sh" | sha256sum | cut -c1-12)"
 docker image inspect "$TAG" >/dev/null 2>&1 || docker build -q -t "$TAG" -f "$ROOT/docker/Dockerfile" "$ROOT" >/dev/null
 
-opts=(--rm --init --network host --shm-size=2g -v "$SHARE:$SHARE" -w "$ROOT" -e HOME=/tmp)
+# INTENT: without --ipc host and the /tmp mount each run gets a private /dev/shm and /tmp, so a ring or a
+# control socket made by the agent in one terminal does not exist for tail or an app in another.
+mkdir -p /tmp/subplane-dev-home
+opts=(--rm --init --network host --ipc host -v /tmp:/tmp -v "$SHARE:$SHARE" -w "$ROOT" -e HOME=/tmp/subplane-dev-home)
 [ -t 0 ] && [ -t 1 ] && opts+=(-it)
 [ -z "${CMAKE_ARGS:-}" ] && [ -x "$SHARE/subplane/build/subplaned" ] && CMAKE_ARGS="-DSUBPLANE_BUILD_DIR=$SHARE/subplane/build"
 as_me=(--user "$(id -u):$(id -g)" -e USER="$(id -un)")
@@ -32,5 +37,5 @@ case "$cmd" in
   run)   exec docker run "${opts[@]}" "${as_me[@]}" "$TAG" "$@" ;;
   bench) exec docker run "${opts[@]}" --cap-add SYS_NICE --security-opt seccomp=unconfined "$TAG" "$@" ;;
   shell) exec docker run "${opts[@]}" "${as_me[@]}" "$TAG" bash ;;
-  *) sed -n '2,15p' "$0"; exit 2 ;;
+  *) sed -n '2,17p' "$0"; exit 2 ;;
 esac

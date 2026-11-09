@@ -5,10 +5,11 @@
 # usage: http_test.sh <spwsgw> <pack.yaml> <fixture dir>
 set -u
 GW=$1; PACK=$2; DIR=$3
-[ -f "$DIR/frames.jsonl" ] || { echo "SKIP: no recording in $DIR (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
+REC="${FEEDS_RECORDINGS:-$(cd "$DIR/../.." && pwd)/recordings}/$(basename "$DIR")"   # the local recording (fixtures/README.md)
+[ -f "$REC/frames.jsonl" ] || { echo "SKIP: no recording in $REC (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
 command -v curl >/dev/null || { echo "SKIP: no curl"; exit 77; }
 TMP=$(mktemp -d)
-"$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out null --replay "$DIR/frames.jsonl" \
+"$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out null --replay "$REC/frames.jsonl" \
       --http 127.0.0.1:0 --instance fx1 --site lab --labels team=md --seconds 20 > /dev/null 2> "$TMP/err.txt" &
 PID=$!
 trap 'kill $PID 2>/dev/null; wait $PID 2>/dev/null; rm -rf "$TMP"' EXIT
@@ -26,7 +27,7 @@ curl -sf -D "$TMP/h.txt" "$U/metrics" > "$TMP/m.txt" || fail "/metrics"
 grep -qi '^content-type: text/plain; version=0.0.4' "$TMP/h.txt" || fail "/metrics content type"
 H=$(hostname)
 grep -q "^subplane_service_info{service=\"spwsgw\",instance=\"fx1\",host=\"$H\",.*site=\"lab\".*team=\"md\"} 1$" "$TMP/m.txt" || fail "service_info"
-FRAMES=$(wc -l < "$DIR/frames.jsonl")
+FRAMES=$(wc -l < "$REC/frames.jsonl")
 grep -Eq '^subplane_gateway_frames_total\{.*\} [1-9][0-9]*$' "$TMP/m.txt" || fail "frames_total"
 grep -q 'subplane_gateway_dropped_total{.*reason="not_connected"} 0' "$TMP/m.txt" || fail "dropped by reason"
 grep -q 'subplane_gateway_frame_to_offer_seconds_bucket{.*le="+Inf"}' "$TMP/m.txt" || fail "histogram"

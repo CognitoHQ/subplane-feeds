@@ -11,7 +11,8 @@
 # Skipped (77) without an agent build directory.
 set -u
 GW=$1; SNAP=$2; AGENT_DIR=$3; PACK=$4; DIR=$5; SCHEMA=$6; IID=$7; HTTP=${8:-0}
-[ -f "$DIR/frames.jsonl" ] || { echo "SKIP: no recording in $DIR (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
+REC="${FEEDS_RECORDINGS:-$(cd "$DIR/../.." && pwd)/recordings}/$(basename "$DIR")"   # the local recording (fixtures/README.md)
+[ -f "$REC/frames.jsonl" ] || { echo "SKIP: no recording in $REC (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
 [ -n "$AGENT_DIR" ] && [ -x "$AGENT_DIR/subplaned" ] && [ -x "$AGENT_DIR/examples/views_app" ] || { echo "SKIP: no agent build (configure with -DSUBPLANE_BUILD_DIR=...)"; exit 77; }
 AGENT="$AGENT_DIR/subplaned"; APP="$AGENT_DIR/examples/views_app"
 TMP=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; rm -rf "$TMP"; rm -f /dev/shm/subplane.snape2e.*.ring' EXIT
@@ -75,7 +76,7 @@ kill -0 $SNAP_PID 2>/dev/null || fail "snap exited early"
 
 # The replay, then the gateway keeps answering control (Republish) for the rest of --seconds.
 gateway() {
-"$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out aeron --channel aeron:ipc --stream-id 1001 --aeron-dir "$ADIR" --replay "$DIR/frames.jsonl" \
+"$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out aeron --channel aeron:ipc --stream-id 1001 --aeron-dir "$ADIR" --replay "$REC/frames.jsonl" \
       --control-channel "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --control-response "127.0.0.1:$CTL_RSP" --seconds 6 > "$TMP/gw$1.log" 2>&1 &
 GW_PID=$!
 }
