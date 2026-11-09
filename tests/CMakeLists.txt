@@ -4,10 +4,11 @@ target_compile_definitions(feeds_test PRIVATE
     FEEDS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME feeds_test COMMAND feeds_test)
 
-# One fixture directory per pack (fixtures/<pack>/frames.jsonl): recorded frames through the pack must
+# One fixture directory per pack: recorded frames through the pack must
 # reproduce expected.txt byte for byte, and the same replay must reach an app through the agent.
-# The recordings are local, never committed (exchange terms bar redistribution, fixtures/README.md):
-# every test is registered and skips (77) until scripts/record-fixture.sh <pack> has been run.
+# fixtures/<pack>/ holds instruments.yaml; the recording itself is local, in recordings/<pack>/ (gitignored;
+# FEEDS_RECORDINGS overrides), never committed (exchange terms bar redistribution, fixtures/README.md).
+# Every test is registered and skips (77) until scripts/record-fixture.sh <pack> has been run.
 file(GLOB FEEDS_FIXTURES LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/fixtures/*)
 foreach(dir ${FEEDS_FIXTURES})
     if(NOT EXISTS ${dir}/instruments.yaml)

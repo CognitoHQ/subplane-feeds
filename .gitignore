@@ -9,7 +9,8 @@ build/
 # Local build logs
 *.log
 
-# Exchange recordings stay local (fixtures/README.md)
+# Exchange recordings stay local (fixtures/README.md); a stray copy under fixtures/ is ignored too
+/recordings/
 fixtures/*/frames.jsonl
 fixtures/*/expected.txt
 *.tmp

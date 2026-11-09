@@ -4,7 +4,8 @@
 # Skipped (77) without an agent build directory.
 set -u
 GW=$1; AGENT_DIR=$2; PACK=$3; DIR=$4; SCHEMA=$5
-[ -f "$DIR/frames.jsonl" ] || { echo "SKIP: no recording in $DIR (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
+REC="${FEEDS_RECORDINGS:-$(cd "$DIR/../.." && pwd)/recordings}/$(basename "$DIR")"   # the local recording (fixtures/README.md)
+[ -f "$REC/frames.jsonl" ] || { echo "SKIP: no recording in $REC (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
 [ -n "$AGENT_DIR" ] && [ -x "$AGENT_DIR/subplaned" ] && [ -x "$AGENT_DIR/examples/views_app" ] || { echo "SKIP: no agent build (configure with -DSUBPLANE_BUILD_DIR=...)"; exit 77; }
 AGENT="$AGENT_DIR/subplaned"; APP="$AGENT_DIR/examples/views_app"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"; kill $(jobs -p) 2>/dev/null; rm -f /dev/shm/subplane.feedse2e.*.ring' EXIT
@@ -37,15 +38,15 @@ YAML
 for _ in $(seq 1 150); do http_get "$API" /status >/dev/null 2>&1 && break; sleep 0.1; done
 kill -0 $AGENT_PID 2>/dev/null || fail "agent exited early"
 sleep 0.5
-"$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out aeron --channel aeron:ipc --stream-id 1001 --aeron-dir "$ADIR" --replay "$DIR/frames.jsonl" --quiet > "$TMP/gw.log" 2>&1 || fail "gateway exit $?"
-EXPECTED=$(grep -c -v "^SourceState" "$DIR/expected.txt")   # data messages; SourceState lines are the state stream
+"$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out aeron --channel aeron:ipc --stream-id 1001 --aeron-dir "$ADIR" --replay "$REC/frames.jsonl" --quiet > "$TMP/gw.log" 2>&1 || fail "gateway exit $?"
+EXPECTED=$(grep -c -v "^SourceState" "$REC/expected.txt")   # data messages; SourceState lines are the state stream
 PUBLISHED=$(grep -o "published=[0-9]*" "$TMP/gw.log" | cut -d= -f2)
 [ "$PUBLISHED" = "$EXPECTED" ] || fail "gateway published $PUBLISHED, expected $EXPECTED: $(cat "$TMP/gw.log")"
 RING=/dev/shm/subplane.feedse2e.all.ring
 "$APP" "$RING" --from-start --quiet --seconds 2 > "$TMP/app.log" 2>&1 || fail "views_app exit $?"
 SUMMARY=$(tail -1 "$TMP/app.log"); echo "$SUMMARY"
 echo "$SUMMARY" | grep -q " bad=0$" || fail "views_app rejected records"
-TRADES=$(grep -c "^Trade " "$DIR/expected.txt"); echo "$SUMMARY" | grep -q "trades=$TRADES " || fail "trade count differs from the fixture ($TRADES)"
+TRADES=$(grep -c "^Trade " "$REC/expected.txt"); echo "$SUMMARY" | grep -q "trades=$TRADES " || fail "trade count differs from the fixture ($TRADES)"
 STATUS=$(http_get "$API" /partitions); echo "$STATUS" | grep -q '"gaps":0' || fail "agent reports gaps: $STATUS"
 OFFERS=$(grep -o "offers=[0-9]*" "$TMP/gw.log" | cut -d= -f2)
 echo "$STATUS" | grep -q "\"packets\":$OFFERS," || fail "agent packets != gateway offers ($OFFERS): $STATUS"

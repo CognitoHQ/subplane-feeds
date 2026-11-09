@@ -12,4 +12,4 @@ C++26 (GCC 16, Ubuntu 26.04), the agent's toolchain (its INV-007), CMake 3.30+, 
 `docs/pack-format.md` (the mapping vocabulary), `docs/gateway.md` (threading, book strategies, ids, sequence, heartbeat, recording). Private notes in `.subplane/` (gitignored).
 
 ## Rules
-No quick hacks; this is infrastructure. One I/O thread on the data path, no queue, no allocation per message after warm-up. `// INTENT:` comments where logic is non-obvious. Capture every design decision in `.subplane/decisions.md`. Record fixtures with `scripts/record-fixture.sh`, test with `--replay`, never with the live exchange in CI; recordings are gitignored and never committed (exchange terms bar redistribution).
+No quick hacks; this is infrastructure. One I/O thread on the data path, no queue, no allocation per message after warm-up. `// INTENT:` comments where logic is non-obvious. Capture every design decision in `.subplane/decisions.md`. Record fixtures with `scripts/record-fixture.sh`, test with `--replay`, never with the live exchange in CI; recordings live in the gitignored `recordings/` and are never committed (exchange terms bar redistribution).
