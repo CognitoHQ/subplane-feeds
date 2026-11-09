@@ -8,3 +8,8 @@ build/
 
 # Local build logs
 *.log
+
+# Exchange recordings stay local (fixtures/README.md)
+fixtures/*/frames.jsonl
+fixtures/*/expected.txt
+*.tmp

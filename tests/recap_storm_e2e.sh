@@ -2,12 +2,14 @@
 # Recap storm: 16 recap sessions added at once (one POST /reload), each asking for the same 2
 # instruments, must reach spwsgw-snap as exactly 2 RecapRequests: the agent coalesces per
 # (partition, symbol), and its recap.coalesce_ms window gathers sessions that ask together (a
-# reload creates them a few ms apart, about 80 ms for all 16, so the test uses 200 ms).
+# reload creates them a few ms apart; with 16 MB rings, sized for a full-depth book recorded today,
+# all 16 take a few hundred ms, so the test uses 1000 ms).
 # Every session must still end with the live session's book for both.
 # usage: recap_storm_e2e.sh <spwsgw> <spwsgw-snap> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml> <book levels>
 # Skipped (77) without an agent build directory.
 set -u
 GW=$1; SNAP=$2; AGENT_DIR=$3; PACK=$4; DIR=$5; SCHEMA=$6; LEVELS=$7
+[ -f "$DIR/frames.jsonl" ] || { echo "SKIP: no recording in $DIR (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
 [ -n "$AGENT_DIR" ] && [ -x "$AGENT_DIR/subplaned" ] && [ -x "$AGENT_DIR/examples/views_app" ] || { echo "SKIP: no agent build (configure with -DSUBPLANE_BUILD_DIR=...)"; exit 77; }
 AGENT="$AGENT_DIR/subplaned"; APP="$AGENT_DIR/examples/views_app"
 SESSIONS=16; IIDS="1 2"
@@ -40,13 +42,14 @@ partitions:
       request:  { channel: "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ", stream_id: 1101 }
       response: { channel: "aeron:udp?control-mode=response|control=127.0.0.1:$RECAP_RSP", stream_id: 1102 }
       timeout_ms: 1000
-      coalesce_ms: 200
+      coalesce_ms: 1000
+      reply_slab_bytes: 16777216   # a full-depth book: Coinbase level2 runs to tens of thousands of levels
 sessions:
-  - { name: live, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: ["*"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }
+  - { name: live, ring: { capacity_mb: 64, max_payload: 4096 }, partitions: [crypto], symbols: ["*"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }
 YAML
 if [ "$1" = yes ]; then
   for i in $(seq 1 $SESSIONS); do
-    echo "  - { name: s$i, recap: true, ring: { capacity_mb: 4, max_payload: 4096 }, partitions: [crypto], symbols: [1, 2], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+    echo "  - { name: s$i, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [1, 2], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
   done
 fi
 cat <<YAML
@@ -64,7 +67,7 @@ for _ in $(seq 1 150); do http_get "$API" /status >/dev/null 2>&1 && break; slee
 kill -0 $! 2>/dev/null || fail "agent exited early"
 
 "$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --recap-channel "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ" --recap-response "127.0.0.1:$RECAP_RSP" \
-        --gateway-control "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --gateway-response "127.0.0.1:$CTL_RSP" --recap-term-length 4194304 \
+        --gateway-control "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --gateway-response "127.0.0.1:$CTL_RSP" --recap-term-length 16777216 \
         --book-levels "$LEVELS" --ask-every-ms 200 > "$TMP/snap.log" 2>&1 &
 SNAP_PID=$!
 sleep 0.5

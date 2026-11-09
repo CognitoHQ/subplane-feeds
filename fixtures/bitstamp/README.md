@@ -1,3 +1,0 @@
-btcusd and ethusd from `wss://ws.bitstamp.net` (live_trades, order_book), recorded on 2026-10-13 with `spwsgw --record` inside the Ubuntu 22.04 container: the first second (subscription acks, first order books) and the 3.3 s to 4.0 s window that holds the first trades. Each `order_book` frame is a full 100-level book, so the gap between the two windows loses nothing. `expected.txt` is the replay output with `--out stdout`; `tests/fixture_test.sh` diffs them. Regenerate with:
-
-    spwsgw --pack packs/bitstamp.yaml --instruments fixtures/bitstamp/instruments.yaml --out stdout --replay fixtures/bitstamp/frames.jsonl --quiet > fixtures/bitstamp/expected.txt

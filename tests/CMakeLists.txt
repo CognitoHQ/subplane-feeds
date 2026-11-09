@@ -6,9 +6,11 @@ add_test(NAME feeds_test COMMAND feeds_test)
 
 # One fixture directory per pack (fixtures/<pack>/frames.jsonl): recorded frames through the pack must
 # reproduce expected.txt byte for byte, and the same replay must reach an app through the agent.
+# The recordings are local, never committed (exchange terms bar redistribution, fixtures/README.md):
+# every test is registered and skips (77) until scripts/record-fixture.sh <pack> has been run.
 file(GLOB FEEDS_FIXTURES LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/fixtures/*)
 foreach(dir ${FEEDS_FIXTURES})
-    if(NOT EXISTS ${dir}/frames.jsonl)
+    if(NOT EXISTS ${dir}/instruments.yaml)
         continue()
     endif()
     get_filename_component(name ${dir} NAME)
@@ -16,6 +18,7 @@ foreach(dir ${FEEDS_FIXTURES})
     set(pack ${CMAKE_SOURCE_DIR}/packs/${name}.yaml)
     add_test(NAME fixture_${tname}
         COMMAND ${CMAKE_SOURCE_DIR}/tests/fixture_test.sh $<TARGET_FILE:spwsgw> ${pack} ${dir})
+    set_tests_properties(fixture_${tname} PROPERTIES SKIP_RETURN_CODE 77)
     # Gateway (replay) -> Aeron IPC -> subplaned -> ring -> views_app, when an agent build is given.
     add_test(NAME agent_e2e_${tname}
         COMMAND ${CMAKE_SOURCE_DIR}/tests/agent_e2e.sh $<TARGET_FILE:spwsgw> "${SUBPLANE_BUILD_DIR}"

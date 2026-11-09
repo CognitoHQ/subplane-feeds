@@ -83,7 +83,7 @@ For data, only two things: `contract/subplane_canonical.xml` (schema id 100) wit
 | `bitstamp` | yes | no | `snapshot_only` (full top 100 per event) | symbol at the end of the channel name |
 | `okx` | yes | tickers | not yet (`okx_seq`, see docs) | text ping/pong |
 
-Each pack has a recorded fixture (`fixtures/<pack>/`) replayed byte-for-byte in `ctest`, and the same replay runs end to end through a local agent build (`-DSUBPLANE_BUILD_DIR=...`): gateway, Aeron IPC, `subplaned`, ring, `views_app`. All recorded live on 2026-10-13 with zero mapping, book or parse errors and zero resyncs.
+Each pack is tested on a recording of the live exchange (`fixtures/<pack>/`), replayed byte-for-byte in `ctest` and end to end through a local agent build (`-DSUBPLANE_BUILD_DIR=...`): gateway, Aeron IPC, `subplaned`, ring, `views_app`. All five were validated live on 2026-10-13 with zero mapping, book or parse errors and zero resyncs. Recordings are not committed, since the exchanges' terms do not allow redistributing their data; `scripts/record-fixture.sh <pack>` records your own in a few seconds (`fixtures/README.md`), and the replay tests skip until you do.
 
 ## Licence
 

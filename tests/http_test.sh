@@ -5,6 +5,7 @@
 # usage: http_test.sh <spwsgw> <pack.yaml> <fixture dir>
 set -u
 GW=$1; PACK=$2; DIR=$3
+[ -f "$DIR/frames.jsonl" ] || { echo "SKIP: no recording in $DIR (record one: scripts/record-fixture.sh $(basename "$DIR"))"; exit 77; }
 command -v curl >/dev/null || { echo "SKIP: no curl"; exit 77; }
 TMP=$(mktemp -d)
 "$GW" --pack "$PACK" --instruments "$DIR/instruments.yaml" --out null --replay "$DIR/frames.jsonl" \

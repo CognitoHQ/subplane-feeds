@@ -9,8 +9,9 @@ what is built and what is planned.
 ## Workflow
 
 1. Build and test in the toolchain image, as in subplane (`scripts/dev.sh test`).
-2. A new venue is a YAML pack plus a recorded fixture (`fixtures/<pack>/`)
-   replayed in `ctest`; see the README's pack table.
+2. A new venue is a YAML pack plus `fixtures/<pack>/instruments.yaml`. Record
+   a fixture locally (`scripts/record-fixture.sh <pack>`) and run the replay
+   tests; never commit the recording (`fixtures/README.md`).
 3. One logical change per commit; explain the why in the message body.
 4. Open a pull request against `main`. CI must be green.
 
