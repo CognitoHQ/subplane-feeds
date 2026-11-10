@@ -330,7 +330,8 @@ static_assert(offsetof(Heartbeat, ExchangeTs) == 24);
 static_assert(offsetof(Heartbeat, RecvTs) == 32);
 
 // Struct form: returns a pointer into the payload, or nullptr. View form: returns an
-// optional view. Both check length, template id and schema id first.
+// optional view. Both check length, template id and schema id first, so a message
+// from an older sender (a shorter block) is refused here; use read<T>() for those.
 template <class T>
 inline auto view(const uint8_t* payload, uint32_t len) noexcept {
     if constexpr (T::kIsStruct) {
@@ -338,6 +339,21 @@ inline auto view(const uint8_t* payload, uint32_t len) noexcept {
     } else {
         return detail::header_matches(payload, len, T::kSize, T::kTemplateId) ? std::optional<T>(T(payload)) : std::nullopt;
     }
+}
+
+// Struct form only: a copy that also accepts older senders. The bytes the sender's
+// blockLength covers are copied and the rest is zero, so a field added after the
+// sender's version reads as 0. nullopt on a wrong template or schema, or a block
+// longer than `len`.
+template <class T>
+inline std::optional<T> read(const uint8_t* payload, uint32_t len) noexcept {
+    static_assert(T::kIsStruct, "read<T>() needs the struct form");
+    if (!detail::header_matches(payload, len, kHeaderSize, T::kTemplateId)) return std::nullopt;
+    const size_t wire = kHeaderSize + detail::load_n(payload, 0, 2);
+    if (wire > len) return std::nullopt;
+    T out{};
+    std::memcpy(&out, payload, wire < T::kSize ? wire : T::kSize);
+    return out;
 }
 
 } // namespace sp_canonical

@@ -8,9 +8,9 @@ Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subp
  │  Exchange  │   WSS / JSON  │  spwsgw             │  Aeron   │  subplaned                 │ SHM  │  app      │
  │  Binance   │──────────────▶│  pack: binance-spot │─────────▶│  partition: crypto         │─────▶│  views    │
  │  Coinbase  │  exchange's   │  registry           │ canonical│   transport: aeron         │ ring │  codec    │
- │  Kraken    │  own format,  │  JSON → canonical   │  SBE,    │   framing: packet          │ per  │  filter   │
- │  ...       │  REST         │  book strategies    │  one msg │   decoder: sbe_routing     │ sess │  by id    │
- └────────────┘  snapshots    │  instruments → ids  │  per     │   (InstrumentId, Sequence, │      └───────────┘
+ │  Kraken    │  own format,  │  JSON → canonical   │  SBE,    │   framing: schema walk     │ per  │  filter   │
+ │  ...       │  REST         │  book strategies    │  whole   │   decoder: sbe_routing     │ sess │  by id    │
+ └────────────┘  snapshots    │  instruments → ids  │  msgs per│   (InstrumentId, Sequence, │      └───────────┘
                               │  Sequence, Heartbeat│  offer,  │    ExchangeTs, VenueId)    │ ┌───────────┐
       one process per pack    │  InstrumentDefinition  gap-free│  sessions: filter + ring   │ │  app 2    │
                               └─────────────────────┘          │  LVC, control, HTTP        │ └───────────┘
@@ -38,10 +38,10 @@ scripts/dev.sh test        # build ./build in the toolchain image (Ubuntu 26.04,
 scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
 
 # For real: Aeron IPC into an agent whose partition is `transport: {type: aeron, channel: "aeron:ipc", stream_id: 1001}`
-scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.yaml --channel aeron:ipc --stream-id 1001
+scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.example.yaml --channel aeron:ipc --stream-id 1001
 ```
 
-`--instruments` gives each venue symbol a stable `InstrumentId` (`site/instruments.example.yaml`); `--symbols` auto-numbers for quick runs. `--spin` keeps the core hot between frames (trades and quotes reach the agent in about 1 µs instead of 5). `--batch-bytes N` (default 1376, one Aeron MTU after its header) lets the messages one frame produced share an offer; the batch is flushed when the frame ends, never on a timer. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
+`--instruments` gives each venue symbol a stable `InstrumentId`: copy `site/instruments.example.yaml` (Binance's spelling, `BTCUSDT`) and add each venue's symbols as that venue spells them (`BTC-USD`); `--symbols` auto-numbers for quick runs. `--spin` keeps the core hot between frames (trades and quotes reach the agent in about 1 µs instead of 5). `--batch-bytes N` (default 1376, one Aeron MTU after its header) lets the messages one frame produced share an offer; the batch is flushed when the frame ends, never on a timer. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
 
 `--http 127.0.0.1:9101` serves `/metrics` (Prometheus), `/topology` and `/health` from a separate thread, with the agent's observability contract (`docs/observability.md`).
 
@@ -67,7 +67,7 @@ streams:
     snapshot: { url: "https://data-api.binance.vision/api/v3/depth?symbol={SYMBOL}&limit=1000", fields: { last_id: lastUpdateId, bids: bids, asks: asks } }
 ```
 
-The models are the canonical schema (`spwsgw models` lists them); conversions default from each field's kind and the named ones (time formats, enum maps, level layouts) live in `packs/registry.yaml`, so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording). `spwsgw-snap` is the gateway's snapshot service: it rebuilds every instrument from the gateway's stream and answers the agent's recap requests (`docs/snap.md`).
+The models are the canonical schema (`spwsgw models` lists them); conversions default from each field's kind and the named ones live in `packs/registry.yaml` (enum maps, level layouts; the time units `s`, `ms`, `us`, `ns` and `iso8601` are built in), so packs do not repeat them. The vocabulary is closed on purpose: a path, a named conversion, and for frames that carry several records `each`. Order-book protocols, authentication and reconnect semantics are strategies in code, named in the pack. `docs/pack-format.md` has the full reference, `docs/gateway.md` the runtime rules (sequence, heartbeats, instrument definitions, snapshots, recording). `spwsgw-snap` is the gateway's snapshot service: it rebuilds every instrument from the gateway's stream and answers the agent's recap requests (`docs/snap.md`).
 
 ## Contract with the agent
 
