@@ -14,7 +14,7 @@ One counter for the whole gateway, every published message, gap-free, assigned a
 
 ## Instruments
 
-`site/instruments.yaml` maps venue symbols to ids and optional base/quote. Ids are what apps filter on, so keep them stable; `--symbols` auto-numbers and warns.
+An instruments file (`--instruments`; start from `site/instruments.example.yaml`) maps venue symbols to ids and optional base/quote. Ids are what apps filter on, so keep them stable; `--symbols` auto-numbers and warns.
 
 ## Books
 
