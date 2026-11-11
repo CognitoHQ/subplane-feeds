@@ -16,7 +16,7 @@ spwsgw-snap --recap-channel aeron:udp?endpoint=SNAPHOST:40500 --recap-response S
             [--http 127.0.0.1:9102] [--site S] [--env E] [--labels k=v,...]
 ```
 
-- **Data and state:** the gateway's `--channel`, `--stream-id` and `--state-stream`. The state stream is on the same channel.
+- **Data and state:** the gateway's `--channel`, its stream (`--stream-id`, or the one `--topic` derives: `topic_id << 16 | partition_num`, e.g. 720897 for `crypto.binance-spot`) and `--state-stream`. The state stream is on the same channel; keep it below 65536, where no topic's stream can be.
 - **Recap:** the agent's partition `recap.request` (`--recap-channel`, `--recap-stream`) and `recap.response` (`--recap-response` is its `control=` address, `--recap-response-stream`). Each requesting agent gets its own response publication.
 - **Gateway control** (optional, but without it nothing is ever republished): the gateway's `--control-channel` and `--control-response`.
 - **`--book-levels`:** at least the gateway's `max_levels` for every book stream. A deeper book overflows here, goes Stale and is asked for again.

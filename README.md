@@ -1,12 +1,12 @@
 # subplane-feeds
 
-Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/CognitoHQ/subplane) agent. One `spwsgw` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` partition and fans it out to every app.
+Gateways that turn an exchange's WebSocket feed into canonical SBE for the [subplane](https://github.com/CognitoHQ/subplane) agent. One `spwsgw` binary; each exchange is a YAML pack. The gateway opens one connection per box, normalizes trades, quotes and the order book into the canonical schema, and publishes them over Aeron. The agent on the same box (or on any box that can reach the stream) ingests that as an ordinary `aeron` topic, one per exchange, and fans it out to every app.
 
 ```
                      exchange box                               the application box
  ┌────────────┐               ┌─────────────────────┐          ┌────────────────────────────┐      ┌───────────┐
  │  Exchange  │   WSS / JSON  │  spwsgw             │  Aeron   │  subplaned                 │ SHM  │  app      │
- │  Binance   │──────────────▶│  pack: binance-spot │─────────▶│  partition: crypto         │─────▶│  views    │
+ │  Binance   │──────────────▶│  pack: binance-spot │─────────▶│  topic: crypto.binance-spot│─────▶│  views    │
  │  Coinbase  │  exchange's   │  registry           │ canonical│   transport: aeron         │ ring │  codec    │
  │  Kraken    │  own format,  │  JSON → canonical   │  SBE,    │   framing: schema walk     │ per  │  filter   │
  │  ...       │  REST         │  book strategies    │  whole   │   decoder: sbe_routing     │ sess │  by id    │
@@ -37,11 +37,12 @@ scripts/dev.sh test        # build ./build in the toolchain image (Ubuntu 26.04,
 # Dry run against Binance, canonical messages as text:
 scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --symbols BTCUSDT,ETHUSDT --out stdout --seconds 10
 
-# For real: Aeron IPC into an agent whose partition is `transport: {type: aeron, channel: "aeron:ipc", stream_id: 1001}`
-scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.example.yaml --channel aeron:ipc --stream-id 1001
+# For real: Aeron IPC into an agent with the topic `crypto.binance-spot` (transport: {type: aeron, channel: "aeron:ipc"})
+scripts/dev.sh run build/spwsgw --pack packs/binance-spot.yaml --instruments site/instruments.example.yaml --channel aeron:ipc \
+  --topic crypto.binance-spot --topic-registry site/topics.example.yaml
 ```
 
-`--instruments` gives each venue symbol a stable `InstrumentId`: copy `site/instruments.example.yaml` (Binance's spelling, `BTCUSDT`) and add each venue's symbols as that venue spells them (`BTC-USD`); `--symbols` auto-numbers for quick runs. `--spin` keeps the core hot between frames (trades and quotes reach the agent in about 1 µs instead of 5). `--batch-bytes N` (default 1376, one Aeron MTU after its header) lets the messages one frame produced share an offer; the batch is flushed when the frame ends, never on a timer. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
+`--topic` names the topic the gateway publishes, one per exchange; `--topic-registry` is the site's topic registry, the same file the agent's `registry:` reads (`site/topics.example.yaml` is a copy of the agent's example). The topic's id gives the stream: `topic_id << 16 | partition_num` (`--partition`, default 1), which is the Aeron stream id unless `--stream-id` says otherwise and which every Heartbeat carries in `StreamId`, so an agent reading the wrong stream counts `stream_mismatch`. Without `--topic`, the stream id is `--stream-id` (default 1001) and heartbeats are unstamped. `--instruments` gives each venue symbol a stable `InstrumentId`: copy `site/instruments.example.yaml` (Binance's spelling, `BTCUSDT`) and add each venue's symbols as that venue spells them (`BTC-USD`); `--symbols` auto-numbers for quick runs. `--spin` keeps the core hot between frames (trades and quotes reach the agent in about 1 µs instead of 5). `--batch-bytes N` (default 1376, one Aeron MTU after its header) lets the messages one frame produced share an offer; the batch is flushed when the frame ends, never on a timer. `--out null` counts and discards, for measuring (`frame_to_offer_ns` on the stats line). `--record frames.jsonl` saves every raw frame and snapshot; `--replay frames.jsonl` plays a recording through the same pack without the exchange, which is how the tests work.
 
 `--http 127.0.0.1:9101` serves `/metrics` (Prometheus), `/topology` and `/health` from a separate thread, with the agent's observability contract (`docs/observability.md`).
 
@@ -71,7 +72,7 @@ The models are the canonical schema (`spwsgw models` lists them); conversions de
 
 ## Contract with the agent
 
-For data, only two things: `contract/subplane_canonical.xml` (schema id 100) with its generated header, both copied from the agent repo, and the framing rule: an Aeron offer carries one or more whole canonical messages back to back, each self-framed by its SBE header, `Sequence` in every message. The agent's partition uses `framing: { length: schema, sequence: message.Sequence }` and walks them apart; no envelope. No shared library in either direction. For operations, the observability contract (`docs/observability.md`) and its endpoint-key vectors (`contract/topology-keys.json`), also copies; `src/obs/` holds copies of the agent's Prometheus writer and key rules.
+For data, only two things: `contract/subplane_canonical.xml` (schema id 100) with its generated header, both copied from the agent repo, and the framing rule: an Aeron offer carries one or more whole canonical messages back to back, each self-framed by its SBE header, `Sequence` in every message. The agent's topic uses `framing: { length: schema, sequence: message.Sequence }` and walks them apart; no envelope. Heartbeats carry the stream's id in `StreamId` (the agent reads it with `fields: { ..., stream_id: StreamId }`). No shared library in either direction. For operations, the observability contract (`docs/observability.md`) and its endpoint-key vectors (`contract/topology-keys.json`), also copies; `src/obs/` holds copies of the agent's Prometheus writer and key rules.
 
 ## Status
 

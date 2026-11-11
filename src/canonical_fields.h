@@ -77,6 +77,7 @@ inline constexpr CanonicalField kInstrumentDefinitionFields[] = {
 };
 inline constexpr CanonicalField kHeartbeatFields[] = {
     FEEDS_FIELD(Heartbeat, ExchangeTs, U64), FEEDS_FIELD(Heartbeat, Flags, U16),
+    FEEDS_FIELD(Heartbeat, StreamId, U32),   // int32 in the schema, always > 0 (topic_id <= 32767); the gateway writes it (--topic)
 };
 #undef FEEDS_FIELD
 #undef FEEDS_ARRAY

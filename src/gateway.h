@@ -40,6 +40,7 @@ struct GatewayOptions {
     bool     log_errors = true;      // first few mapping errors to stderr
     uint64_t source_epoch = 0;       // SourceState.SourceEpoch: this process's start, ns; a new value tells subscribers Sequence restarted
     uint32_t republish_per_second = 20;   // instruments republished per second at most (one per tick() at the most)
+    int32_t  stream_stamp = 0;       // Heartbeat.StreamId: topic_id << 16 | partition_num (--topic); 0 = unstamped
 };
 
 // Written by the gateway thread only; readable from any thread (one_writer.h), which

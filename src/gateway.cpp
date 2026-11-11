@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstddef>
 #include <cstring>
 
 namespace feeds {
@@ -156,6 +157,9 @@ void Gateway::publish_heartbeat(uint64_t now) noexcept {
     const CanonicalMessage* m = find_message("Heartbeat");
     begin_message(buf, *m, 0, pack_.venue_id, 0, now);
     put_u64(buf, kPrefixExchangeTs, now);
+    // INTENT: the stream says what it is, so an agent wired to the wrong stream
+    // counts stream_mismatch instead of silently routing another topic's data.
+    std::memcpy(buf + offsetof(sp_canonical::Heartbeat, StreamId), &opts_.stream_stamp, 4);
     publish(buf, sizeof buf, stats_.heartbeats);
     last_heartbeat_ = now;
 }
