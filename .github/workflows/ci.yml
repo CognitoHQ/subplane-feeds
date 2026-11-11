@@ -4,7 +4,11 @@ jobs:
   build-2604-gcc16:
     runs-on: ubuntu-latest
     # The base of docker/Dockerfile; scripts/dev.sh runs the same deps script locally.
-    container: ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
+    container:
+      image: ubuntu:26.04@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c
+      # INTENT: from 2026-11-11 the runner's DNS stopped answering inside the job container
+      # (apt and git could not resolve hosts); explicit resolvers fixed it in the agent repo's CI.
+      options: --dns 1.1.1.1 --dns 8.8.8.8
     steps:
       - uses: actions/checkout@v4
       - name: deps
