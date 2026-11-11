@@ -301,11 +301,11 @@ static_assert(offsetof(InstrumentDefinition, TickSize) == 120);
 static_assert(offsetof(InstrumentDefinition, LotSize) == 128);
 static_assert(offsetof(InstrumentDefinition, Status) == 136);
 
-// Heartbeat: template 100, 40 bytes.
+// Heartbeat: template 100, 48 bytes.
 struct Heartbeat {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 100;
-    static constexpr size_t kSize = 40;
+    static constexpr size_t kSize = 48;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -316,6 +316,8 @@ struct Heartbeat {
     uint64_t Sequence;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
+    int32_t StreamId;
+    uint8_t _pad0[4];
 };
 static_assert(sizeof(Heartbeat) == Heartbeat::kSize);
 static_assert(offsetof(Heartbeat, blockLength) == 0);
@@ -328,6 +330,7 @@ static_assert(offsetof(Heartbeat, Flags) == 14);
 static_assert(offsetof(Heartbeat, Sequence) == 16);
 static_assert(offsetof(Heartbeat, ExchangeTs) == 24);
 static_assert(offsetof(Heartbeat, RecvTs) == 32);
+static_assert(offsetof(Heartbeat, StreamId) == 40);
 
 // Struct form: returns a pointer into the payload, or nullptr. View form: returns an
 // optional view. Both check length, template id and schema id first, so a message

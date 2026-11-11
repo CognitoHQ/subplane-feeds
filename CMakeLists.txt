@@ -47,6 +47,7 @@ add_library(feeds_core STATIC
     src/decimal.cpp
     src/mapper.cpp
     src/instruments.cpp
+    src/topic_registry.cpp
     src/book/book.cpp
     src/book/binance_diff.cpp
     src/book/l2_inband.cpp

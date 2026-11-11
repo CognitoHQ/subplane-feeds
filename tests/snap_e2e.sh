@@ -25,15 +25,16 @@ SOCK="$TMP/ctl.sock"; ADIR="$TMP/aeron"
 
 sessions() {   # $1 = how many late recap sessions: 0, 1 (late) or 2 (late, again)
   echo "sessions:"
-  echo "  - { name: live, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [\"*\"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
-  [ "$1" -ge 1 ] && echo "  - { name: late, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
-  [ "$1" -ge 2 ] && echo "  - { name: again, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+  echo "  - { name: live, ring: { capacity_mb: 16, max_payload: 4096 }, topics: [crypto], symbols: [\"*\"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+  [ "$1" -ge 1 ] && echo "  - { name: late, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, topics: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+  [ "$1" -ge 2 ] && echo "  - { name: again, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, topics: [crypto], symbols: [$IID], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
   return 0
 }
 config() {
 cat <<YAML
-agent: { name: snape2e, version: test, max_symbols: 65536, thread_groups: [ { name: g0, cpu: -1, partitions: [crypto] } ] }
-partitions:
+agent: { name: snape2e, version: test, max_symbols: 65536, thread_groups: [ { name: g0, cpu: -1, topics: [crypto] } ] }
+registry: [ { id: 11, name: crypto } ]
+topics:
   - name: crypto
     transport: { type: aeron, channel: "aeron:ipc", stream_id: 1001, aeron_dir: "$ADIR", driver: { embedded: true, threading_mode: shared } }
     framing: { length: schema, sequence: message.Sequence }

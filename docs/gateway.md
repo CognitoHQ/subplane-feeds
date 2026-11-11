@@ -6,11 +6,11 @@ One I/O thread. A WebSocket frame is parsed with simdjson On Demand, routed to a
 
 ## Sequence
 
-One counter for the whole gateway, every published message, gap-free, assigned at publish time. A message the publisher drops (no subscriber, sustained back pressure) still consumes its number, so the agent sees a real gap for a real loss. The agent partition is configured `framing: { length: schema, sequence: message.Sequence }`: an offer carries several messages back to back (see Batching).
+One counter for the whole gateway, every published message, gap-free, assigned at publish time. A message the publisher drops (no subscriber, sustained back pressure) still consumes its number, so the agent sees a real gap for a real loss. The agent's topic is configured `framing: { length: schema, sequence: message.Sequence }`: an offer carries several messages back to back (see Batching).
 
 ## Heartbeats and definitions
 
-`Heartbeat` (InstrumentId 0) every `--heartbeat-ms` (default 1000) whatever the market does, so the agent's heartbeat timeout stays meaningful. `InstrumentDefinition` for every instrument at connect, after every reconnect, and every `--definitions-ms` (default 60000): Symbol, Exchange, Base and Quote (from the instruments file), Status Trading. TickSize and LotSize are 0 until a pack learns them from the exchange's instrument endpoint.
+`Heartbeat` (InstrumentId 0) every `--heartbeat-ms` (default 1000) whatever the market does, so the agent's heartbeat timeout stays meaningful. With `--topic` its `StreamId` is the stream it is published on (`topic_id << 16 | partition_num`, the topic id from `--topic-registry`), and an agent whose topic is configured with `fields: { ..., stream_id: StreamId }` counts `stream_mismatch` when a heartbeat names another stream; without `--topic` it is 0 (unstamped). `InstrumentDefinition` for every instrument at connect, after every reconnect, and every `--definitions-ms` (default 60000): Symbol, Exchange, Base and Quote (from the instruments file), Status Trading. TickSize and LotSize are 0 until a pack learns them from the exchange's instrument endpoint.
 
 ## Instruments
 

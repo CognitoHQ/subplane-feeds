@@ -1,7 +1,7 @@
 // spwsgw: one exchange connection per box, canonical SBE out over Aeron.
 //
 //   spwsgw --pack packs/binance-spot.yaml (--instruments site.yaml | --symbols BTCUSDT,ETHUSDT)
-//                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001]
+//                    [--registry packs/registry.yaml] [--out aeron|stdout|null] [--channel aeron:ipc] [--stream-id 1001] [--topic T --topic-registry F [--partition N]]
 //                    [--aeron-dir D] [--embedded-driver] [--state-stream 1002] [--record frames.jsonl] [--replay frames.jsonl]
 //                    [--republish-per-second 20] [--source-epoch N]
 //                    [--control-channel aeron:udp?endpoint=H:P --control-response H:P [--control-stream 1003] [--control-response-stream 1004]]
@@ -10,6 +10,7 @@
 //   spwsgw models        # the canonical messages and fields a pack can target
 
 #include "gateway.h"
+#include "topic_registry.h"
 #include "obs/observe.h"
 #include "replayer.h"
 #if FEEDS_WITH_NETWORK
@@ -43,7 +44,7 @@ void on_signal(int) { g_stop = 1; }
 
 void usage() {
     std::fputs("usage: spwsgw --pack P (--instruments F | --symbols A,B) [--registry R] [--out aeron|stdout|null] [--channel C]\n"
-               "                        [--stream-id N] [--aeron-dir D] [--embedded-driver] [--state-stream N] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
+               "                        [--topic T --topic-registry site/topics.yaml [--partition N]] [--stream-id N] [--aeron-dir D] [--embedded-driver] [--state-stream N] [--record F] [--replay F] [--snapshot-every N] [--batch-bytes N]\n"
                "                        [--republish-per-second N] [--source-epoch N]\n"
                "                        [--control-channel C --control-response HOST:PORT [--control-stream N] [--control-response-stream N]]\n"
                "                        [--heartbeat-ms N] [--definitions-ms N] [--seconds N] [--subscribe] [--spin] [--quiet]\n"
@@ -105,6 +106,7 @@ int main(int argc, char** argv) {
                                           "snapshot-every", "batch-bytes", "heartbeat-ms", "definitions-ms", "seconds",
                                           "state-stream", "republish-per-second", "source-epoch",
                                           "control-channel", "control-stream", "control-response", "control-response-stream",
+                                          "topic", "topic-registry", "partition",
                                           "http", "instance", "site", "env", "labels"};
     const std::set<std::string> boolean = {"embedded-driver", "quiet", "help", "subscribe", "spin"};
     for (int i = 1; i < argc; ++i) {
@@ -146,6 +148,26 @@ int main(int argc, char** argv) {
     // A replay is deterministic: a fixed epoch unless given, so recordings diff exactly.
     opts.source_epoch = getu("source-epoch", replaying ? 1 : started);
 
+    // --topic names the topic this gateway publishes (the site's registry gives
+    // its id): the stream is topic_id << 16 | partition_num, stamped on every
+    // heartbeat, and the Aeron stream id unless --stream-id says otherwise.
+    int32_t topic_stream = 0;
+    if (a.count("topic")) {
+        if (!a.count("topic-registry")) { std::fputs("spwsgw: --topic needs --topic-registry (the site's topics.yaml)\n", stderr); return 2; }
+        feeds::TopicRegistry topics;
+        if (!topics.load_file(a["topic-registry"], err)) { std::fprintf(stderr, "spwsgw: %s\n", err.c_str()); return 2; }
+        const feeds::TopicEntry* te = topics.find(a["topic"]);
+        if (!te) { std::fprintf(stderr, "spwsgw: topic %s is not in %s\n", a["topic"].c_str(), a["topic-registry"].c_str()); return 2; }
+        const uint64_t part = getu("partition", 1);
+        if (part < 1 || part > 65535) { std::fputs("spwsgw: --partition must be 1..65535\n", stderr); return 2; }
+        topic_stream = feeds::stream_id_of(te->id, static_cast<uint16_t>(part));
+        opts.stream_stamp = topic_stream;
+        if (!quiet) std::fprintf(stderr, "spwsgw: topic %s (id %u) partition %llu: stream_id %d\n", te->name.c_str(), te->id,
+                                 static_cast<unsigned long long>(part), topic_stream);
+    } else if (a.count("topic-registry") || a.count("partition")) {
+        std::fputs("spwsgw: --topic-registry and --partition go with --topic\n", stderr); return 2;
+    }
+
     std::unique_ptr<Publisher> owned;
     Publisher* pub = nullptr;
     Publisher* state_pub = nullptr;
@@ -162,7 +184,7 @@ int main(int argc, char** argv) {
 #if FEEDS_WITH_AERON
         AeronPublisherConfig ac;
         ac.channel = get("channel", "aeron:ipc");
-        ac.stream_id = static_cast<int32_t>(getu("stream-id", 1001));
+        ac.stream_id = static_cast<int32_t>(getu("stream-id", topic_stream != 0 ? static_cast<uint64_t>(topic_stream) : 1001));
         ac.aeron_dir = get("aeron-dir", "");
         ac.embedded_driver = flags.count("embedded-driver") != 0;
         ac.state_stream_id = static_cast<int32_t>(getu("state-stream", 1002));

@@ -25,8 +25,9 @@ SOCK="$TMP/ctl.sock"; ADIR="$TMP/aeron"
 
 config() {   # $1 = with the storm sessions
 cat <<YAML
-agent: { name: storme2e, version: test, max_symbols: 65536, thread_groups: [ { name: g0, cpu: -1, partitions: [crypto] } ] }
-partitions:
+agent: { name: storme2e, version: test, max_symbols: 65536, thread_groups: [ { name: g0, cpu: -1, topics: [crypto] } ] }
+registry: [ { id: 11, name: crypto } ]
+topics:
   - name: crypto
     transport: { type: aeron, channel: "aeron:ipc", stream_id: 1001, aeron_dir: "$ADIR", driver: { embedded: true, threading_mode: shared } }
     framing: { length: schema, sequence: message.Sequence }
@@ -46,11 +47,11 @@ partitions:
       coalesce_ms: 1000
       reply_slab_bytes: 16777216   # a full-depth book: Coinbase level2 runs to tens of thousands of levels
 sessions:
-  - { name: live, ring: { capacity_mb: 64, max_payload: 4096 }, partitions: [crypto], symbols: ["*"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }
+  - { name: live, ring: { capacity_mb: 64, max_payload: 4096 }, topics: [crypto], symbols: ["*"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }
 YAML
 if [ "$1" = yes ]; then
   for i in $(seq 1 $SESSIONS); do
-    echo "  - { name: s$i, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, partitions: [crypto], symbols: [1, 2], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+    echo "  - { name: s$i, recap: true, ring: { capacity_mb: 16, max_payload: 4096 }, topics: [crypto], symbols: [1, 2], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
   done
 fi
 cat <<YAML
