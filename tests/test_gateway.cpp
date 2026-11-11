@@ -1,8 +1,11 @@
 #include "gateway.h"
+#include "canonical_fields.h"
 
 #include "doctest.h"
 
+#include <cstring>
 #include <sstream>
+#include <tuple>
 
 using namespace feeds;
 
@@ -344,4 +347,38 @@ TEST_CASE("recovery: an overflowed in-band book is Stale and asks for a reconnec
     CHECK(gw.stats().overflow_reconnects == 1);
     gw.on_frame(R"({"type":"l2update","product_id":"BTC-USD","changes":[["buy","100.2","3"]],"time":"2024-01-02T03:04:08Z"})", 5);
     CHECK(gw.state(1) == sp_proto::SourceStateCode::Stale);   // updates without a book are dropped
+}
+
+namespace {
+// Every message offered, split by its SBE header (an offer may batch several).
+struct Capture final : Publisher {
+    std::vector<std::vector<uint8_t>> msgs;
+    Offer publish(const uint8_t* m, size_t n) noexcept override {
+        for (size_t at = 0; at + sp_canonical::kHeaderSize <= n;) {
+            uint16_t block; std::memcpy(&block, m + at, 2);
+            const size_t len = sp_canonical::kHeaderSize + block;
+            msgs.emplace_back(m + at, m + at + len);
+            at += len;
+        }
+        return Offer::OK;
+    }
+    std::string describe() const override { return "capture"; }
+};
+template <class T> T at(const std::vector<uint8_t>& m, uint16_t off) { T v; std::memcpy(&v, m.data() + off, sizeof v); return v; }
+}
+
+TEST_CASE("InstrumentSeq counts each instrument 1, 2, 3 ..., definitions included; heartbeats carry 0") {
+    Fixture f;
+    Capture cap;
+    GatewayOptions o = quiet(); o.heartbeat_ms = 1000; o.definitions_ms = 60000;
+    Gateway gw(f.pack, f.ins, cap, o);
+    gw.on_connected(1'000'000'000);
+    gw.tick(1'000'000'000);   // two definitions, a heartbeat
+    gw.on_frame(R"({"stream":"btcusdt@trade","data":{"p":"1","q":"1","T":1,"t":1,"m":false}})", 2);
+    gw.on_frame(R"({"stream":"ethusdt@trade","data":{"p":"1","q":"1","T":1,"t":2,"m":false}})", 3);
+    gw.on_frame(R"({"stream":"btcusdt@trade","data":{"p":"1","q":"1","T":1,"t":3,"m":false}})", 4);
+    std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> got;   // instrument, Sequence, InstrumentSeq
+    for (const auto& m : cap.msgs) got.emplace_back(at<uint32_t>(m, kPrefixInstrumentId), at<uint64_t>(m, kPrefixSequence), at<uint64_t>(m, kPrefixInstrumentSeq));
+    const std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> want = {{1, 1, 1}, {2, 2, 1}, {0, 3, 0}, {1, 4, 2}, {2, 5, 2}, {1, 6, 3}};
+    CHECK(got == want);
 }

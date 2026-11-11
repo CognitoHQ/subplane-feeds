@@ -1,8 +1,9 @@
 #pragma once
 
-// Fills the SBE header and the 32-byte canonical prefix of any message. The
-// pack never sets these: InstrumentId, VenueId, Sequence and RecvTs are the
-// gateway's, ExchangeTs and Flags are written by the mapper when mapped.
+// Fills the SBE header and the 40-byte canonical prefix of any message. The
+// pack never sets these: InstrumentId, VenueId, Sequence, InstrumentSeq and
+// RecvTs are the gateway's (Sequence and InstrumentSeq at publish), ExchangeTs
+// and Flags are written by the mapper when mapped.
 
 #include "canonical_fields.h"
 

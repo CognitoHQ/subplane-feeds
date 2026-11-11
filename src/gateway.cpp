@@ -123,9 +123,17 @@ void Gateway::log_error(const char* what, const std::string& err) noexcept {
 // produced; it is offered when that unit ends, or earlier when the next message
 // would not fit. So the last message of a frame leaves at the same moment it would
 // have without batching, and the Aeron frame header is paid once per batch.
-void Gateway::publish(uint8_t* msg, size_t len, OneWriter& counter) noexcept {
+void Gateway::publish(uint8_t* msg, size_t len, OneWriter& counter, const Instrument* in) noexcept {
     const uint64_t seq = ++seq_;
     std::memcpy(msg + kPrefixSequence, &seq, 8);
+    // INTENT: InstrumentSeq counts this instrument's messages, 1, 2, 3 ... with
+    // no holes. It is the topic's count, whatever stream carries the message, so
+    // an agent drops a copy of it from another stream and finds a gap per
+    // instrument. Every message about the instrument counts, definitions too.
+    if (in != nullptr) {
+        const uint64_t iseq = ++states_[static_cast<size_t>(in - ins_.all().data())].iseq;
+        std::memcpy(msg + kPrefixInstrumentSeq, &iseq, 8);
+    }
     ++counter;
     if (opts_.batch_bytes == 0) { offer(msg, len, 1); return; }
     if (!batch_.empty() && batch_.size() + len > opts_.batch_bytes) flush();
@@ -178,7 +186,7 @@ void Gateway::publish_definition(const Instrument& in, uint64_t now) noexcept {
     chars("Base", in.base);
     chars("Quote", in.quote);
     put(buf, find_field(*m, "Status")->offset, static_cast<uint8_t>(1)); // Trading
-    publish(buf, sizeof buf, stats_.definitions);
+    publish(buf, sizeof buf, stats_.definitions, &in);
 }
 
 void Gateway::publish_definitions(uint64_t now) noexcept {
@@ -358,7 +366,7 @@ void Gateway::publish_book_update(const BookSlot& slot, Side side, Action action
     put(buf, find_field(*m, "Side")->offset, static_cast<uint8_t>(side));
     put(buf, find_field(*m, "Action")->offset, static_cast<uint8_t>(action));
     put(buf, find_field(*m, "Level")->offset, level);
-    publish(buf, sizeof buf, stats_.book_updates);
+    publish(buf, sizeof buf, stats_.book_updates, slot.ins);
 }
 
 void Gateway::publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept {
@@ -394,7 +402,7 @@ void Gateway::publish_emits(BookSlot& slot, uint64_t recv_ts) noexcept {
             const size_t na = top_.size();
             for (size_t i = 0; i < na; ++i) { put_i64(buf, static_cast<uint16_t>(apx + 8 * i), top_[i].px); put_i64(buf, static_cast<uint16_t>(aq + 8 * i), top_[i].qty); }
             put(buf, find_field(*m, "Depth")->offset, static_cast<uint8_t>(std::max(nb, na)));
-            publish(buf, sizeof buf, stats_.book_snapshots);
+            publish(buf, sizeof buf, stats_.book_snapshots, slot.ins);
         }
     }
     emits_.clear();
@@ -436,7 +444,7 @@ void Gateway::handle_record(const StreamDef& sd, const Instrument* in, simdjson:
         OneWriter* counter = &stats_.other;
         if (sd.msg->template_id == sp_canonical::Trade::kTemplateId) counter = &stats_.trades;
         else if (sd.msg->template_id == sp_canonical::Quote::kTemplateId) counter = &stats_.quotes;
-        publish(buf, sd.msg->size, *counter);
+        publish(buf, sd.msg->size, *counter, in);
         return;
     }
     // The `kind` role (record scope) overrides the frame type for book strategies.

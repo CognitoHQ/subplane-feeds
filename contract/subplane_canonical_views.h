@@ -33,11 +33,11 @@ inline bool header_matches(const uint8_t* p, uint32_t len, size_t size, uint16_t
 }
 } // namespace detail
 
-// Trade: template 1, 72 bytes. Constant fields omitted: PriceExponent (PriceExponent).
+// Trade: template 1, 80 bytes. Constant fields omitted: PriceExponent (PriceExponent).
 struct Trade {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 1;
-    static constexpr size_t kSize = 72;
+    static constexpr size_t kSize = 80;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -46,6 +46,7 @@ struct Trade {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     int64_t Price;  // Price
@@ -63,18 +64,19 @@ static_assert(offsetof(Trade, InstrumentId) == 8);
 static_assert(offsetof(Trade, VenueId) == 12);
 static_assert(offsetof(Trade, Flags) == 14);
 static_assert(offsetof(Trade, Sequence) == 16);
-static_assert(offsetof(Trade, ExchangeTs) == 24);
-static_assert(offsetof(Trade, RecvTs) == 32);
-static_assert(offsetof(Trade, Price) == 40);
-static_assert(offsetof(Trade, Qty) == 48);
-static_assert(offsetof(Trade, TradeId) == 56);
-static_assert(offsetof(Trade, Aggressor) == 64);
+static_assert(offsetof(Trade, InstrumentSeq) == 24);
+static_assert(offsetof(Trade, ExchangeTs) == 32);
+static_assert(offsetof(Trade, RecvTs) == 40);
+static_assert(offsetof(Trade, Price) == 48);
+static_assert(offsetof(Trade, Qty) == 56);
+static_assert(offsetof(Trade, TradeId) == 64);
+static_assert(offsetof(Trade, Aggressor) == 72);
 
-// Quote: template 2, 72 bytes. Constant fields omitted: PriceExponent (PriceExponent).
+// Quote: template 2, 80 bytes. Constant fields omitted: PriceExponent (PriceExponent).
 struct Quote {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 2;
-    static constexpr size_t kSize = 72;
+    static constexpr size_t kSize = 80;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -83,6 +85,7 @@ struct Quote {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     int64_t BidPx;  // Price
@@ -99,18 +102,19 @@ static_assert(offsetof(Quote, InstrumentId) == 8);
 static_assert(offsetof(Quote, VenueId) == 12);
 static_assert(offsetof(Quote, Flags) == 14);
 static_assert(offsetof(Quote, Sequence) == 16);
-static_assert(offsetof(Quote, ExchangeTs) == 24);
-static_assert(offsetof(Quote, RecvTs) == 32);
-static_assert(offsetof(Quote, BidPx) == 40);
-static_assert(offsetof(Quote, BidQty) == 48);
-static_assert(offsetof(Quote, AskPx) == 56);
-static_assert(offsetof(Quote, AskQty) == 64);
+static_assert(offsetof(Quote, InstrumentSeq) == 24);
+static_assert(offsetof(Quote, ExchangeTs) == 32);
+static_assert(offsetof(Quote, RecvTs) == 40);
+static_assert(offsetof(Quote, BidPx) == 48);
+static_assert(offsetof(Quote, BidQty) == 56);
+static_assert(offsetof(Quote, AskPx) == 64);
+static_assert(offsetof(Quote, AskQty) == 72);
 
-// BookUpdate: template 3, 64 bytes. Constant fields omitted: PriceExponent (PriceExponent).
+// BookUpdate: template 3, 72 bytes. Constant fields omitted: PriceExponent (PriceExponent).
 struct BookUpdate {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 3;
-    static constexpr size_t kSize = 64;
+    static constexpr size_t kSize = 72;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -119,6 +123,7 @@ struct BookUpdate {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     int64_t Price;  // Price
@@ -137,19 +142,20 @@ static_assert(offsetof(BookUpdate, InstrumentId) == 8);
 static_assert(offsetof(BookUpdate, VenueId) == 12);
 static_assert(offsetof(BookUpdate, Flags) == 14);
 static_assert(offsetof(BookUpdate, Sequence) == 16);
-static_assert(offsetof(BookUpdate, ExchangeTs) == 24);
-static_assert(offsetof(BookUpdate, RecvTs) == 32);
-static_assert(offsetof(BookUpdate, Price) == 40);
-static_assert(offsetof(BookUpdate, Qty) == 48);
-static_assert(offsetof(BookUpdate, Side) == 56);
-static_assert(offsetof(BookUpdate, Action) == 57);
-static_assert(offsetof(BookUpdate, Level) == 58);
+static_assert(offsetof(BookUpdate, InstrumentSeq) == 24);
+static_assert(offsetof(BookUpdate, ExchangeTs) == 32);
+static_assert(offsetof(BookUpdate, RecvTs) == 40);
+static_assert(offsetof(BookUpdate, Price) == 48);
+static_assert(offsetof(BookUpdate, Qty) == 56);
+static_assert(offsetof(BookUpdate, Side) == 64);
+static_assert(offsetof(BookUpdate, Action) == 65);
+static_assert(offsetof(BookUpdate, Level) == 66);
 
-// BookSnapshot: template 4, 368 bytes. Constant fields omitted: PriceExponent (PriceExponent).
+// BookSnapshot: template 4, 376 bytes. Constant fields omitted: PriceExponent (PriceExponent).
 struct BookSnapshot {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 4;
-    static constexpr size_t kSize = 368;
+    static constexpr size_t kSize = 376;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -158,6 +164,7 @@ struct BookSnapshot {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     int64_t BidPx[10];  // Price10
@@ -176,19 +183,20 @@ static_assert(offsetof(BookSnapshot, InstrumentId) == 8);
 static_assert(offsetof(BookSnapshot, VenueId) == 12);
 static_assert(offsetof(BookSnapshot, Flags) == 14);
 static_assert(offsetof(BookSnapshot, Sequence) == 16);
-static_assert(offsetof(BookSnapshot, ExchangeTs) == 24);
-static_assert(offsetof(BookSnapshot, RecvTs) == 32);
-static_assert(offsetof(BookSnapshot, BidPx) == 40);
-static_assert(offsetof(BookSnapshot, BidQty) == 120);
-static_assert(offsetof(BookSnapshot, AskPx) == 200);
-static_assert(offsetof(BookSnapshot, AskQty) == 280);
-static_assert(offsetof(BookSnapshot, Depth) == 360);
+static_assert(offsetof(BookSnapshot, InstrumentSeq) == 24);
+static_assert(offsetof(BookSnapshot, ExchangeTs) == 32);
+static_assert(offsetof(BookSnapshot, RecvTs) == 40);
+static_assert(offsetof(BookSnapshot, BidPx) == 48);
+static_assert(offsetof(BookSnapshot, BidQty) == 128);
+static_assert(offsetof(BookSnapshot, AskPx) == 208);
+static_assert(offsetof(BookSnapshot, AskQty) == 288);
+static_assert(offsetof(BookSnapshot, Depth) == 368);
 
-// Ohlcv: template 5, 88 bytes. Constant fields omitted: PriceExponent (PriceExponent).
+// Ohlcv: template 5, 96 bytes. Constant fields omitted: PriceExponent (PriceExponent).
 struct Ohlcv {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 5;
-    static constexpr size_t kSize = 88;
+    static constexpr size_t kSize = 96;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -197,6 +205,7 @@ struct Ohlcv {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     int64_t Open;  // Price
@@ -216,20 +225,21 @@ static_assert(offsetof(Ohlcv, InstrumentId) == 8);
 static_assert(offsetof(Ohlcv, VenueId) == 12);
 static_assert(offsetof(Ohlcv, Flags) == 14);
 static_assert(offsetof(Ohlcv, Sequence) == 16);
-static_assert(offsetof(Ohlcv, ExchangeTs) == 24);
-static_assert(offsetof(Ohlcv, RecvTs) == 32);
-static_assert(offsetof(Ohlcv, Open) == 40);
-static_assert(offsetof(Ohlcv, High) == 48);
-static_assert(offsetof(Ohlcv, Low) == 56);
-static_assert(offsetof(Ohlcv, Close) == 64);
-static_assert(offsetof(Ohlcv, Volume) == 72);
-static_assert(offsetof(Ohlcv, IntervalSec) == 80);
+static_assert(offsetof(Ohlcv, InstrumentSeq) == 24);
+static_assert(offsetof(Ohlcv, ExchangeTs) == 32);
+static_assert(offsetof(Ohlcv, RecvTs) == 40);
+static_assert(offsetof(Ohlcv, Open) == 48);
+static_assert(offsetof(Ohlcv, High) == 56);
+static_assert(offsetof(Ohlcv, Low) == 64);
+static_assert(offsetof(Ohlcv, Close) == 72);
+static_assert(offsetof(Ohlcv, Volume) == 80);
+static_assert(offsetof(Ohlcv, IntervalSec) == 88);
 
-// Status: template 6, 48 bytes.
+// Status: template 6, 56 bytes.
 struct Status {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 6;
-    static constexpr size_t kSize = 48;
+    static constexpr size_t kSize = 56;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -238,6 +248,7 @@ struct Status {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     uint8_t TradingStatus;  // TradingStatus
@@ -253,16 +264,17 @@ static_assert(offsetof(Status, InstrumentId) == 8);
 static_assert(offsetof(Status, VenueId) == 12);
 static_assert(offsetof(Status, Flags) == 14);
 static_assert(offsetof(Status, Sequence) == 16);
-static_assert(offsetof(Status, ExchangeTs) == 24);
-static_assert(offsetof(Status, RecvTs) == 32);
-static_assert(offsetof(Status, TradingStatus) == 40);
-static_assert(offsetof(Status, Reason) == 41);
+static_assert(offsetof(Status, InstrumentSeq) == 24);
+static_assert(offsetof(Status, ExchangeTs) == 32);
+static_assert(offsetof(Status, RecvTs) == 40);
+static_assert(offsetof(Status, TradingStatus) == 48);
+static_assert(offsetof(Status, Reason) == 49);
 
-// InstrumentDefinition: template 10, 144 bytes. Constant fields omitted: PriceExponent (PriceExponent).
+// InstrumentDefinition: template 10, 152 bytes. Constant fields omitted: PriceExponent (PriceExponent).
 struct InstrumentDefinition {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 10;
-    static constexpr size_t kSize = 144;
+    static constexpr size_t kSize = 152;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -271,6 +283,7 @@ struct InstrumentDefinition {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     char Symbol[32];  // Symbol32
@@ -291,21 +304,22 @@ static_assert(offsetof(InstrumentDefinition, InstrumentId) == 8);
 static_assert(offsetof(InstrumentDefinition, VenueId) == 12);
 static_assert(offsetof(InstrumentDefinition, Flags) == 14);
 static_assert(offsetof(InstrumentDefinition, Sequence) == 16);
-static_assert(offsetof(InstrumentDefinition, ExchangeTs) == 24);
-static_assert(offsetof(InstrumentDefinition, RecvTs) == 32);
-static_assert(offsetof(InstrumentDefinition, Symbol) == 40);
-static_assert(offsetof(InstrumentDefinition, Exchange) == 72);
-static_assert(offsetof(InstrumentDefinition, Base) == 88);
-static_assert(offsetof(InstrumentDefinition, Quote) == 104);
-static_assert(offsetof(InstrumentDefinition, TickSize) == 120);
-static_assert(offsetof(InstrumentDefinition, LotSize) == 128);
-static_assert(offsetof(InstrumentDefinition, Status) == 136);
+static_assert(offsetof(InstrumentDefinition, InstrumentSeq) == 24);
+static_assert(offsetof(InstrumentDefinition, ExchangeTs) == 32);
+static_assert(offsetof(InstrumentDefinition, RecvTs) == 40);
+static_assert(offsetof(InstrumentDefinition, Symbol) == 48);
+static_assert(offsetof(InstrumentDefinition, Exchange) == 80);
+static_assert(offsetof(InstrumentDefinition, Base) == 96);
+static_assert(offsetof(InstrumentDefinition, Quote) == 112);
+static_assert(offsetof(InstrumentDefinition, TickSize) == 128);
+static_assert(offsetof(InstrumentDefinition, LotSize) == 136);
+static_assert(offsetof(InstrumentDefinition, Status) == 144);
 
-// Heartbeat: template 100, 48 bytes.
+// Heartbeat: template 100, 56 bytes.
 struct Heartbeat {
     static constexpr bool kIsStruct = true;
     static constexpr uint16_t kTemplateId = 100;
-    static constexpr size_t kSize = 48;
+    static constexpr size_t kSize = 56;
     uint16_t blockLength;
     uint16_t templateId;
     uint16_t schemaId;
@@ -314,6 +328,7 @@ struct Heartbeat {
     uint16_t VenueId;
     uint16_t Flags;
     uint64_t Sequence;
+    uint64_t InstrumentSeq;
     uint64_t ExchangeTs;  // Ts
     uint64_t RecvTs;  // Ts
     int32_t StreamId;
@@ -328,9 +343,10 @@ static_assert(offsetof(Heartbeat, InstrumentId) == 8);
 static_assert(offsetof(Heartbeat, VenueId) == 12);
 static_assert(offsetof(Heartbeat, Flags) == 14);
 static_assert(offsetof(Heartbeat, Sequence) == 16);
-static_assert(offsetof(Heartbeat, ExchangeTs) == 24);
-static_assert(offsetof(Heartbeat, RecvTs) == 32);
-static_assert(offsetof(Heartbeat, StreamId) == 40);
+static_assert(offsetof(Heartbeat, InstrumentSeq) == 24);
+static_assert(offsetof(Heartbeat, ExchangeTs) == 32);
+static_assert(offsetof(Heartbeat, RecvTs) == 40);
+static_assert(offsetof(Heartbeat, StreamId) == 48);
 
 // Struct form: returns a pointer into the payload, or nullptr. View form: returns an
 // optional view. Both check length, template id and schema id first, so a message

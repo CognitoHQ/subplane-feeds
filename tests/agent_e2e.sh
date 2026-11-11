@@ -24,7 +24,7 @@ topics:
     decoder:
       type: sbe_routing
       schema: $SCHEMA
-      fields: { symbol: InstrumentId, sequence: Sequence, exchange_ts: ExchangeTs, venue: VenueId, stream_id: StreamId }
+      fields: { symbol: InstrumentId, sequence: Sequence, instrument_sequence: InstrumentSeq, exchange_ts: ExchangeTs, venue: VenueId, stream_id: StreamId }
       symbol_id_mode: table
       messages: [ { template: 1, msg_type: TRADE }, { template: 2, msg_type: QUOTE }, { template: 3, msg_type: BOOK_UPDATE }, { template: 4, msg_type: BOOK_SNAPSHOT }, { template: 5, msg_type: OHLCV }, { template: 6, msg_type: STATUS }, { template: 10, msg_type: DEFINITION }, { template: 100, admin: HEARTBEAT } ]
     heartbeat_timeout_ms: 5000
@@ -52,6 +52,8 @@ echo "$SUMMARY" | grep -q " bad=0$" || fail "views_app rejected records"
 TRADES=$(grep -c "^Trade " "$REC/expected.txt"); echo "$SUMMARY" | grep -q "trades=$TRADES " || fail "trade count differs from the fixture ($TRADES)"
 STATUS=$(http_get "$API" /partitions); echo "$STATUS" | grep -q '"gaps":0' || fail "agent reports gaps: $STATUS"
 echo "$STATUS" | grep -q '"stream_mismatch":0,' || fail "the gateway's heartbeat stamp does not match the agent's stream: $STATUS"
+# Every instrument counted 1, 2, 3 ... by the gateway: no instrument gap, no copy dropped.
+echo "$STATUS" | grep -q '"inst_gaps":0,"inst_dups":0' || fail "instrument sequence not contiguous: $STATUS"
 OFFERS=$(grep -o "offers=[0-9]*" "$TMP/gw.log" | cut -d= -f2)
 echo "$STATUS" | grep -q "\"packets\":$OFFERS," || fail "agent packets != gateway offers ($OFFERS): $STATUS"
 echo "$STATUS" | grep -q "\"messages\":$PUBLISHED," || fail "agent messages != gateway published ($PUBLISHED): $STATUS"
