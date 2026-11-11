@@ -34,6 +34,7 @@ TEST_CASE("canonical field table matches contract/subplane_canonical.xml") {
             if (fname == "InstrumentId") { CHECK(kPrefixInstrumentId == off); continue; }
             if (fname == "VenueId") { CHECK(kPrefixVenueId == off); continue; }
             if (fname == "Sequence") { CHECK(kPrefixSequence == off); continue; }
+            if (fname == "InstrumentSeq") { CHECK(kPrefixInstrumentSeq == off); continue; }
             if (fname == "RecvTs") { CHECK(kPrefixRecvTs == off); continue; }
             const CanonicalField* cf = find_field(*m, fname);
             REQUIRE_MESSAGE(cf != nullptr, (name + "." + fname));

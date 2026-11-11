@@ -18,8 +18,19 @@ namespace {
 // deliver them; `drop` loses the next n data offers (a gap).
 struct DataTap final : Publisher {
     SnapCore& core; int drop = 0;
+    uint64_t btc_iseq = 0;   // InstrumentSeq of the last message about instrument 1 offered
     explicit DataTap(SnapCore& c) : core(c) {}
-    Offer publish(const uint8_t* m, size_t n) noexcept override { if (drop > 0) { --drop; return Offer::OK; } core.on_data(m, n); return Offer::OK; }
+    Offer publish(const uint8_t* m, size_t n) noexcept override {
+        if (drop > 0) { --drop; return Offer::OK; }
+        for (size_t at = 0; at + sp_canonical::kHeaderSize <= n;) {
+            uint16_t block; std::memcpy(&block, m + at, 2);
+            uint32_t iid; std::memcpy(&iid, m + at + kPrefixInstrumentId, 4);
+            if (iid == 1) std::memcpy(&btc_iseq, m + at + kPrefixInstrumentSeq, 8);
+            at += sp_canonical::kHeaderSize + block;
+        }
+        core.on_data(m, n);
+        return Offer::OK;
+    }
     std::string describe() const override { return "tap"; }
 };
 struct StateTap final : Publisher {
@@ -194,8 +205,11 @@ TEST_CASE("snap: a recap reply is Begin, the definition, Clear, every level, End
         CHECK(seq == gw.sequence());
         uint32_t iid; std::memcpy(&iid, p + kPrefixInstrumentId, 4);
         CHECK(iid == 1);
+        uint64_t iseq; std::memcpy(&iseq, p + kPrefixInstrumentSeq, 8);
+        CHECK(iseq == r.data.btc_iseq);   // every record says the instrument as of S
         if (const auto* u = sp_canonical::view<sp_canonical::BookUpdate>(p, static_cast<uint32_t>(d.Payload_size()))) actions.push_back(u->Action);
     }
+    CHECK(r.data.btc_iseq > 1);
     CHECK(kinds.front() == sp_canonical::InstrumentDefinition::kTemplateId);
     CHECK(actions == std::vector<uint8_t>{4, 1, 1, 1});        // Clear, two bids, one ask
     out.clear();

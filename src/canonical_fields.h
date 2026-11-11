@@ -31,11 +31,12 @@ struct CanonicalMessage {
     size_t nfields;
 };
 
-// The 32-byte prefix shared by every message, at the same offsets.
+// The 40-byte prefix shared by every message, at the same offsets.
 inline constexpr uint16_t kPrefixInstrumentId = static_cast<uint16_t>(offsetof(sp_canonical::Trade, InstrumentId));
 inline constexpr uint16_t kPrefixVenueId      = static_cast<uint16_t>(offsetof(sp_canonical::Trade, VenueId));
 inline constexpr uint16_t kPrefixFlags        = static_cast<uint16_t>(offsetof(sp_canonical::Trade, Flags));
 inline constexpr uint16_t kPrefixSequence     = static_cast<uint16_t>(offsetof(sp_canonical::Trade, Sequence));
+inline constexpr uint16_t kPrefixInstrumentSeq = static_cast<uint16_t>(offsetof(sp_canonical::Trade, InstrumentSeq));
 inline constexpr uint16_t kPrefixExchangeTs   = static_cast<uint16_t>(offsetof(sp_canonical::Trade, ExchangeTs));
 inline constexpr uint16_t kPrefixRecvTs       = static_cast<uint16_t>(offsetof(sp_canonical::Trade, RecvTs));
 

@@ -88,6 +88,7 @@ void SnapCore::on_message(const uint8_t* m, size_t n) noexcept {
     const uint16_t venue = u16(m, kPrefixVenueId);
     if (tid == sp_canonical::Heartbeat::kTemplateId || id == 0) return;
     Inst& in = inst(id, venue);
+    if (const uint64_t is = u64(m, kPrefixInstrumentSeq); is != 0) in.iseq = is;
     const uint32_t len = static_cast<uint32_t>(n);
     if (const auto* b = sp_canonical::view<sp_canonical::BookUpdate>(m, len)) {
         in.has_book = true;
@@ -261,6 +262,9 @@ void SnapCore::answer(uint64_t correlation, uint64_t instrument, uint16_t venue,
         const size_t n = std::min(m.size(), sizeof buf);
         std::memcpy(buf, m.data(), n);
         std::memcpy(buf + kPrefixSequence, &s, 8);
+        // INTENT: every record of the reply says the instrument as of S, so an
+        // agent orders the snapshot and the live messages after it by InstrumentSeq.
+        std::memcpy(buf + kPrefixInstrumentSeq, &in->iseq, 8);
         record(buf, n);
     };
     stored(in->definition);
@@ -271,6 +275,7 @@ void SnapCore::answer(uint64_t correlation, uint64_t instrument, uint16_t venue,
         uint8_t buf[sp_canonical::BookUpdate::kSize];
         auto level = [&](Side side, Action action, uint8_t lvl, int64_t px, int64_t qty) {
             begin_message(buf, *bu, in->id, in->venue, s, 0);
+            put_u64(buf, kPrefixInstrumentSeq, in->iseq);
             put_i64(buf, o_px, px); put_i64(buf, o_qty, qty);
             put(buf, o_side, static_cast<uint8_t>(side)); put(buf, o_act, static_cast<uint8_t>(action)); put(buf, o_lvl, lvl);
             record(buf, sizeof buf);

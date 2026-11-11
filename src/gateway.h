@@ -111,9 +111,12 @@ private:
         sp_proto::SourceReason reason = sp_proto::SourceReason::None;
         bool ever_ok = false, queued = false;
         uint64_t correlation = 0;      // of the Republish that queued it
+        uint64_t iseq = 0;             // InstrumentSeq of its last published message
     };
 
-    void publish(uint8_t* msg, size_t len, OneWriter& counter) noexcept;   // appends to the current batch
+    // Appends to the current batch. Stamps Sequence, and the instrument's next
+    // InstrumentSeq when `in` is given (data about one instrument).
+    void publish(uint8_t* msg, size_t len, OneWriter& counter, const Instrument* in = nullptr) noexcept;
     void offer(const uint8_t* msg, size_t len, uint64_t messages) noexcept;
     void flush() noexcept;                                                   // one offer for everything appended since the last flush
     void publish_heartbeat(uint64_t now) noexcept;

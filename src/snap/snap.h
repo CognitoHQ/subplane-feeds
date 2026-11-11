@@ -66,6 +66,7 @@ private:
         bool full_depth = false;            // a Clear was seen: BookUpdates carry the whole book
         bool has_book = false;
         uint64_t whole_at = 0;              // Sequence of the last Clear (or whole BookSnapshot); 0 = not whole
+        uint64_t iseq = 0;                  // InstrumentSeq of the last message seen; replies are as of it
         Book book;
         std::vector<uint8_t> definition, quote, trade, status, snapshot;   // last message of each, as published
         uint64_t last_ask = 0;

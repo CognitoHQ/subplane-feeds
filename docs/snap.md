@@ -54,7 +54,7 @@ On connecting to the gateway's control channel the snap sends `Hello`, then `Rep
 For an Ok instrument, one reply (each message with the request's `CorrelationId`):
 
 1. `RecapBegin{AsOf = S, SourceEpoch, RecordCount}`. S is the last data `Sequence` applied.
-2. `RecapRecord`s, each one canonical message with `Sequence = S`:
+2. `RecapRecord`s, each one canonical message with `Sequence = S` and `InstrumentSeq` = the instrument's last one applied (the instrument as of S, so an agent orders the reply and the live messages after it per instrument):
    - the InstrumentDefinition;
    - for a full-depth book, `BookUpdate{Clear}` then every level as `Add` (bids then asks, best first, `Level` up to 9, 255 beyond);
    - for a snapshot-only book, its last `BookSnapshot`;

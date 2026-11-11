@@ -60,7 +60,7 @@ Placeholders in names and URLs: `{symbol}` (stream case), `{SYMBOL}` (venue spel
 | `max_levels` | For book streams: the levels a side of each instrument's book holds (16 to 1000000, default 5000). They are allocated once at startup, so the data path never allocates; size it above the exchange's whole book (Coinbase `level2_batch` sends tens of thousands a side). A new level on a full side is an overflow: the book is dropped and resynced, never published with holes (see gateway.md, "Books"). |
 | `snapshot_kind` | For `l2_inband`: the `kind` value that carries a full book (default `snapshot`). |
 
-Exactly one of `message` and `book`. The prefix fields (`InstrumentId`, `VenueId`, `Sequence`, `RecvTs`) are never mapped: the gateway sets them. `ExchangeTs` and `Flags` may be mapped.
+Exactly one of `message` and `book`. The prefix fields (`InstrumentId`, `VenueId`, `Sequence`, `InstrumentSeq`, `RecvTs`) are never mapped: the gateway sets them. `ExchangeTs` and `Flags` may be mapped.
 
 ## Paths
 
