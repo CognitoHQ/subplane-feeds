@@ -78,10 +78,23 @@ std::string SnapObserver::metrics_text() const {
     w.gauge("subplane_snap_instrument_state", state_help, {{"state", "stale"}}, static_cast<double>(static_cast<uint64_t>(s.instruments_stale)));
     w.gauge("subplane_snap_instrument_state", state_help, {{"state", "unknown"}}, static_cast<double>(static_cast<uint64_t>(s.instruments_unknown)));
 
-    const char* rq_help = "RecapRequests by result: reply, not_ready (known, not Ok), unknown_instrument";
-    w.counter("subplane_snap_recap_requests_total", rq_help, {{"result", "reply"}}, s.replies);
-    w.counter("subplane_snap_recap_requests_total", rq_help, {{"result", "not_ready"}}, s.rejects_not_ready);
+    const char* rq_help = "RecapRequests for one instrument by result: queued (its section is due after the gather window), "
+                          "coalesced (already wanted), unknown_instrument (never seen here)";
+    const uint64_t queued = s.requests - s.wants_coalesced - s.rejects_unknown;
+    w.counter("subplane_snap_recap_requests_total", rq_help, {{"result", "queued"}}, queued);
+    w.counter("subplane_snap_recap_requests_total", rq_help, {{"result", "coalesced"}}, s.wants_coalesced);
     w.counter("subplane_snap_recap_requests_total", rq_help, {{"result", "unknown_instrument"}}, s.rejects_unknown);
+    w.counter("subplane_snap_recap_bulk_requests_total", "RecapRequests for every instrument (Bulk)", {}, s.bulk_requests);
+    w.counter("subplane_snap_sections_total", "Sections built: one instrument's state, published once for every agent that wants it", {}, s.sections);
+    w.counter("subplane_snap_section_bytes_total", "Bytes of the sections built", {}, s.section_bytes);
+    w.gauge("subplane_snap_recap_wanted", "Instruments with recap interest whose section is not out yet", {}, static_cast<double>(static_cast<uint64_t>(s.wanted)));
+    w.gauge("subplane_snap_recap_waiting", "Of those, instruments whose section is due but that are not Ok yet", {}, static_cast<double>(static_cast<uint64_t>(s.waiting)));
+    w.counter("subplane_snap_sections_offered_total", "Sections the section stream took", {}, live_.sections_offered);
+    w.counter("subplane_snap_section_bytes_offered_total", "Bytes of the sections the section stream took", {}, live_.section_bytes_offered);
+    w.counter("subplane_snap_sections_back_pressured_total", "Section offers retried because a subscriber is behind", {}, live_.sections_back_pressured);
+    w.counter("subplane_snap_sections_dropped_total", "Sections not delivered: nobody subscribed, or the publication failed", {}, live_.sections_dropped);
+    w.counter("subplane_snap_sections_throttled_total", "Waits for the section rate budget (--section-rate)", {}, live_.sections_throttled);
+    w.gauge("subplane_snap_sections_connected", "1 while an agent subscribes to the section stream", {}, live_.sections_connected ? 1 : 0);
     each_recap(recap_, [&](const char* n, const char* help, uint64_t x) { w.counter("subplane_snap_recap_" + std::string(n) + "_total", help, {}, x); });
     w.gauge("subplane_snap_recap_peers", "Requesters connected to the recap channel", {}, static_cast<double>(static_cast<uint64_t>(recap_.peers)));
     if (link_) {
@@ -108,8 +121,13 @@ std::string SnapObserver::metrics_json() const {
         first = false;
         o += "\"" + std::string(n) + "\":" + std::to_string(x);
     });
-    o += "},\"recap\":{\"reply\":" + std::to_string(static_cast<uint64_t>(s.replies)) + ",\"not_ready\":" + std::to_string(static_cast<uint64_t>(s.rejects_not_ready)) +
-         ",\"unknown_instrument\":" + std::to_string(static_cast<uint64_t>(s.rejects_unknown));
+    const auto num = [](uint64_t v) { return std::to_string(v); };
+    o += "},\"recap\":{\"requests\":" + num(s.requests) + ",\"coalesced\":" + num(s.wants_coalesced) +
+         ",\"unknown_instrument\":" + num(s.rejects_unknown) + ",\"bulk_requests\":" + num(s.bulk_requests) +
+         ",\"sections\":" + num(s.sections) + ",\"section_bytes\":" + num(s.section_bytes) + ",\"wanted\":" + num(s.wanted) +
+         ",\"waiting\":" + num(s.waiting) + ",\"sections_offered\":" + num(live_.sections_offered) +
+         ",\"sections_back_pressured\":" + num(live_.sections_back_pressured) + ",\"sections_dropped\":" + num(live_.sections_dropped) +
+         ",\"sections_throttled\":" + num(live_.sections_throttled) + ",\"sections_connected\":" + std::string(live_.sections_connected ? "true" : "false");
     each_recap(recap_, [&](const char* n, const char*, uint64_t x) { o += ",\"" + std::string(n) + "\":" + std::to_string(x); });
     o += ",\"peers\":" + std::to_string(static_cast<uint64_t>(recap_.peers)) + "}";
     if (link_) {

@@ -115,6 +115,29 @@ private:
     aeron_exclusive_publication_t* pub_ = nullptr;
 };
 
+// A plain exclusive publication on an existing client: spwsgw-snap's section
+// stream. One offer per call; the caller decides what to do when it is not taken.
+class AeronPublication {
+public:
+    enum class Result : uint8_t { OK, BACK_PRESSURED, NOT_CONNECTED, FAILED };
+    AeronPublication() = default;
+    AeronPublication(const AeronPublication&) = delete;
+    AeronPublication& operator=(const AeronPublication&) = delete;
+    ~AeronPublication() { close(); }
+
+    bool open(aeron_t* client, std::string channel, int32_t stream_id, uint64_t timeout_ms, std::string& err);
+    Result offer(const uint8_t* buf, size_t len) noexcept;
+    bool connected() const noexcept { return pub_ && aeron_exclusive_publication_is_connected(pub_); }
+    const std::string& channel() const noexcept { return channel_; }
+    int32_t stream_id() const noexcept { return stream_id_; }
+    void close() noexcept;
+
+private:
+    std::string channel_;
+    int32_t stream_id_ = 0;
+    aeron_exclusive_publication_t* pub_ = nullptr;
+};
+
 // The SPP control input (control.h) on any Aeron client: the gateway's control
 // channel, and spwsgw-snap's recap channel. `dir` is the client's driver directory.
 struct AeronControlConfig;

@@ -219,7 +219,15 @@ TEST_CASE("snap: metrics and topology from its stats, the gateway upstream and t
     const std::string c = R"(service="spwsgw-snap",instance="snap1",host="Box1")";
     CHECK(has(m, "subplane_service_info{" + c + R"(,version="0.1.0",epoch="5",site="",env="",team="md"} 1)"));
     CHECK(has(m, "subplane_snap_gaps_total{" + c + "} 0"));
-    CHECK(has(m, "subplane_snap_recap_requests_total{" + c + R"(,result="not_ready"} 0)"));
+    CHECK(has(m, "subplane_snap_recap_requests_total{" + c + R"(,result="queued"} 0)"));
+    CHECK(has(m, "subplane_snap_recap_requests_total{" + c + R"(,result="coalesced"} 0)"));
+    CHECK(has(m, "subplane_snap_recap_bulk_requests_total{" + c + "} 0"));
+    live.sections_offered.set(3);
+    live.sections_connected.set(1);
+    const std::string m2 = o.metrics_text();
+    CHECK(has(m2, "subplane_snap_sections_offered_total{" + c + "} 3"));
+    CHECK(has(m2, "subplane_snap_sections_connected{" + c + "} 1"));
+    CHECK(has(m2, "subplane_snap_recap_waiting{" + c + "} 0"));
     CHECK(has(m, "subplane_snap_recap_peers{" + c + "} 2"));
     CHECK(has(m, "subplane_snap_gateway_republish_sent_total{" + c + "} 0"));
     CHECK(has(m, "subplane_snap_instrument_state{" + c + R"(,state="ok"} 0)"));

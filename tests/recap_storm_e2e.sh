@@ -43,6 +43,7 @@ topics:
       aeron_dir: "$ADIR"
       request:  { channel: "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ", stream_id: 1101 }
       response: { channel: "aeron:udp?control-mode=response|control=127.0.0.1:$RECAP_RSP", stream_id: 1102 }
+      sections: { channel: "aeron:ipc", stream_id: 1103 }
       timeout_ms: 1000
       coalesce_ms: 1000
       reply_slab_bytes: 16777216   # a full-depth book: Coinbase level2 runs to tens of thousands of levels
@@ -68,7 +69,7 @@ config no > "$TMP/config.yaml"
 for _ in $(seq 1 150); do http_get "$API" /status >/dev/null 2>&1 && break; sleep 0.1; done
 kill -0 $! 2>/dev/null || fail "agent exited early"
 
-"$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --recap-channel "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ" --recap-response "127.0.0.1:$RECAP_RSP" \
+"$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --recap-channel "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ" --recap-response "127.0.0.1:$RECAP_RSP" --section-channel aeron:ipc \
         --gateway-control "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --gateway-response "127.0.0.1:$CTL_RSP" --recap-term-length 16777216 \
         --book-levels "$LEVELS" --ask-every-ms 200 > "$TMP/snap.log" 2>&1 &
 SNAP_PID=$!
@@ -123,5 +124,6 @@ for i in $(seq 1 $SESSIONS); do
 done
 kill -INT $SNAP_PID; wait $SNAP_PID 2>/dev/null
 grep -q " requests=2 " "$TMP/snap.log" || fail "the snap did not see exactly 2 requests: $(tail -1 "$TMP/snap.log")"
+grep -q " sections=2 " "$TMP/snap.log" || fail "the snap did not publish exactly 2 sections: $(tail -1 "$TMP/snap.log")"
 echo "$(tail -1 "$TMP/snap.log")"
 echo "PASS: $SESSIONS sessions x 2 instruments -> 2 requests at the snap; every book equals the live one ($TOTAL levels)"

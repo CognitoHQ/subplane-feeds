@@ -6,6 +6,7 @@ namespace feeds {
 namespace {
 
 constexpr uint16_t kProtoVersion = 1;
+constexpr uint16_t kRecapRequestBulk = 1u << 0;   // RecapRequest.Flags bit 0: every instrument
 
 template <class Enc, class F> void append(std::vector<uint8_t>& out, F fill) noexcept {
     uint8_t buf[128];
@@ -63,10 +64,11 @@ void RecapServer::on_message(const uint8_t* msg, size_t len, std::vector<uint8_t
     case sp_proto::RecapRequestDecoder::kTemplateId: {
         sp_proto::RecapRequestDecoder d;
         if (!d.wrap(msg, len)) { ++stats_.malformed; return; }
-        try {
-            core_.answer(d.CorrelationId(), d.Instrument(), d.Venue(), reply);
-        } catch (...) {
-            status(correlation, sp_proto::StatusCode::Busy, reply);   // out of memory for the reply
+        if (d.Flags() & kRecapRequestBulk) { core_.want_all(now_); return; }
+        if (core_.want(d.Instrument(), d.Venue(), now_) == SnapCore::Want::UNKNOWN) {
+            append<sp_proto::RecapRejectEncoder>(reply, [&](sp_proto::RecapRejectEncoder& e) {
+                e.CorrelationId(d.CorrelationId()).Reason(sp_proto::RejectReason::UnknownInstrument);
+            });
         }
         return;
     }

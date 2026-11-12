@@ -162,6 +162,15 @@ int main(int argc, char** argv) {
         if (part < 1 || part > 65535) { std::fputs("spwsgw: --partition must be 1..65535\n", stderr); return 2; }
         topic_stream = feeds::stream_id_of(te->id, static_cast<uint16_t>(part));
         opts.stream_stamp = topic_stream;
+        // INTENT: one publisher per partition: this gateway publishes only the
+        // instruments the instruments file puts on its partition (default 1).
+        const size_t before = instruments.all().size();
+        if (instruments.keep_partition(static_cast<uint16_t>(part)) == 0) {
+            std::fprintf(stderr, "spwsgw: no instrument is on partition %llu (instruments set `partition:`; default 1)\n", static_cast<unsigned long long>(part));
+            return 2;
+        }
+        if (!quiet && instruments.all().size() != before)
+            std::fprintf(stderr, "spwsgw: partition %llu publishes %zu of %zu instruments\n", static_cast<unsigned long long>(part), instruments.all().size(), before);
         if (!quiet) std::fprintf(stderr, "spwsgw: topic %s (id %u) partition %llu: stream_id %d\n", te->name.c_str(), te->id,
                                  static_cast<unsigned long long>(part), topic_stream);
     } else if (a.count("topic-registry") || a.count("partition")) {

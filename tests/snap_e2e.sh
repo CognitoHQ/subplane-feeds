@@ -4,7 +4,7 @@
 # A recap session added after the replay (POST /reload) must end with the same book as a session
 # that read the stream from the start, level by level. Then the gateway runs again (a restart:
 # new epoch, Sequence from 1): the snap forgets, asks again, and a second recap session gets the
-# new epoch's book.
+# new epoch's book. Sections go out on the snap's section stream (aeron:ipc here), read by the agent.
 # With HTTP=1 (a network build), also scrapes the snap's /metrics and /topology and joins its
 # topology to the agent's on the recap and data keys.
 # usage: snap_e2e.sh <spwsgw> <spwsgw-snap> <agent build dir or empty> <pack.yaml> <fixture dir> <schema.xml> <instrument id> [HTTP]
@@ -50,6 +50,7 @@ topics:
       aeron_dir: "$ADIR"
       request:  { channel: "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ", stream_id: 1101 }
       response: { channel: "aeron:udp?control-mode=response|control=127.0.0.1:$RECAP_RSP", stream_id: 1102 }
+      sections: { channel: "aeron:ipc", stream_id: 1103 }
       timeout_ms: 1000
 YAML
 sessions "$1"
@@ -68,7 +69,7 @@ AGENT_PID=$!
 for _ in $(seq 1 150); do http_get "$API" /status >/dev/null 2>&1 && break; sleep 0.1; done
 kill -0 $AGENT_PID 2>/dev/null || fail "agent exited early"
 
-"$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --recap-channel "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ" --recap-response "127.0.0.1:$RECAP_RSP" \
+"$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --recap-channel "aeron:udp?endpoint=127.0.0.1:$RECAP_REQ" --recap-response "127.0.0.1:$RECAP_RSP" --section-channel aeron:ipc \
         --gateway-control "aeron:udp?endpoint=127.0.0.1:$CTL_REQ" --gateway-response "127.0.0.1:$CTL_RSP" --recap-term-length 1048576 --ask-every-ms 200 \
         $([ "$HTTP" = 1 ] && echo --http 127.0.0.1:0 --site lab) > "$TMP/snap.log" 2>&1 &
 SNAP_PID=$!
@@ -142,7 +143,7 @@ if [ "$HTTP" = 1 ]; then
   SPORT=$(sed -n 's/^spwsgw-snap: http on port \([0-9]*\)$/\1/p' "$TMP/snap.log")
   [ -n "$SPORT" ] || fail "the snap printed no http port"
   http_get "$SPORT" /metrics > "$TMP/snap.metrics" || fail "snap /metrics"
-  grep -Eq '^subplane_snap_recap_requests_total\{.*result="reply"\} [1-9]' "$TMP/snap.metrics" || fail "snap metrics: no replies counted"
+  grep -Eq '^subplane_snap_sections_offered_total\{.*\} [1-9]' "$TMP/snap.metrics" || fail "snap metrics: no sections offered"
   # The gateway has exited by now: once the snap sees its image go, the instrument is Stale, not Ok.
   grep -Eq '^subplane_snap_instrument_state\{.*state="(ok|stale)"\} 1$' "$TMP/snap.metrics" || fail "snap metrics: the instrument is neither ok nor stale"
   # promtool, when installed (always in the toolchain image and CI): the snap's metrics, and the
@@ -166,6 +167,6 @@ fi
 kill -INT $SNAP_PID; wait $SNAP_PID 2>/dev/null
 grep -q "requests=[1-9]" "$TMP/snap.log" || fail "the snap served no request"
 grep -q "restarts=1 " "$TMP/snap.log" || fail "the snap did not see exactly one gateway restart: $(tail -1 "$TMP/snap.log")"
-grep -Eq "replies=([2-9]|[1-9][0-9])" "$TMP/snap.log" || fail "the snap did not reply after the restart: $(tail -1 "$TMP/snap.log")"
+grep -Eq "sections=([2-9]|[1-9][0-9])" "$TMP/snap.log" || fail "the snap published no section after the restart: $(tail -1 "$TMP/snap.log")"
 echo "$(tail -1 "$TMP/snap.log")"
 echo "PASS: the recap session's book equals the live one ($LEVELS levels), and again after a gateway restart ($(wc -l < "$TMP/again.book") levels)"

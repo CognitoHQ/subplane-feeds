@@ -21,6 +21,7 @@ EnvironmentFile=/etc/subplane/snap-%i.env
 ExecStart=/usr/local/bin/spwsgw-snap --name snap-%i --aeron-dir ${SNAP_AERON_DIR} \
     --data-channel ${SNAP_DATA_CHANNEL} --data-stream ${SNAP_DATA_STREAM} --state-stream ${SNAP_STATE_STREAM} \
     --recap-channel ${SNAP_RECAP_CHANNEL} --recap-response ${SNAP_RECAP_RESPONSE} \
+    --section-channel ${SNAP_SECTION_CHANNEL} --section-stream ${SNAP_SECTION_STREAM} --section-rate ${SNAP_SECTION_RATE} \
     --gateway-control ${SNAP_GATEWAY_CONTROL} --gateway-response ${SNAP_GATEWAY_RESPONSE} \
     --book-levels ${SNAP_BOOK_LEVELS} --http ${SNAP_HTTP} $SNAP_EXTRA
 # SIGTERM: the snap prints its final stats and closes its Aeron resources.
@@ -29,7 +30,7 @@ TimeoutStopSec=10
 Restart=on-failure
 RestartSec=2
 # Restarting is safe: a new snap starts Unknown, asks the gateway to Republish,
-# and answers NotReady (the agent retries) until it is whole again.
+# and holds recap interest until each instrument is whole again.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
