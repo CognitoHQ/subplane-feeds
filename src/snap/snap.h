@@ -64,6 +64,10 @@ public:
     Want want(uint64_t instrument, uint16_t venue, uint64_t now) noexcept;
     // Interest in every instrument this copy knows: one bulk window per partition.
     void want_all(uint64_t now) noexcept;
+    // Cold, at startup: an instrument this copy will carry (the gateway's
+    // instruments file), known before its first message so interest in it is
+    // held until it is whole instead of refused as unknown.
+    void expect(uint32_t id, uint16_t venue) { inst(id, venue); }
     // The next due section, appended to `out` as u32-length-prefixed SPP
     // messages (RecapBegin naming the instrument, RecapRecords, RecapEnd), its
     // interest cleared. Single interest goes before bulk. False when none is due.
