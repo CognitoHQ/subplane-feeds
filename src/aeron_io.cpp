@@ -84,6 +84,27 @@ void AeronSubscriber::close() noexcept {
     if (assembler_) { aeron_fragment_assembler_delete(assembler_); assembler_ = nullptr; }
 }
 
+bool AeronPublication::open(aeron_t* client, std::string channel, int32_t stream_id, uint64_t timeout_ms, std::string& err) {
+    channel_ = std::move(channel);
+    stream_id_ = stream_id;
+    aeron_async_add_exclusive_publication_t* async = nullptr;
+    if (aeron_async_add_exclusive_publication(&async, client, channel_.c_str(), stream_id_) < 0) return fail("add publication", err);
+    return await(pub_, async, aeron_async_add_exclusive_publication_poll, timeout_ms, "publication", err);
+}
+
+AeronPublication::Result AeronPublication::offer(const uint8_t* buf, size_t len) noexcept {
+    if (!pub_) return Result::FAILED;
+    const int64_t rc = aeron_exclusive_publication_offer(pub_, buf, len, nullptr, nullptr);
+    if (rc >= 0) return Result::OK;
+    if (rc == AERON_PUBLICATION_NOT_CONNECTED) return Result::NOT_CONNECTED;
+    if (rc == AERON_PUBLICATION_BACK_PRESSURED || rc == AERON_PUBLICATION_ADMIN_ACTION) return Result::BACK_PRESSURED;
+    return Result::FAILED;
+}
+
+void AeronPublication::close() noexcept {
+    if (pub_) { aeron_exclusive_publication_close(pub_, nullptr, nullptr); pub_ = nullptr; }
+}
+
 bool AeronRequester::open(aeron_t* client, const Config& cfg, std::string& err) {
     cfg_ = cfg;
     if (cfg_.request_channel.find("aeron:udp") != 0) { err = "the request channel must be aeron:udp (Aeron response channels need UDP)"; return false; }

@@ -1,5 +1,6 @@
 #include "gateway.h"
 #include "snap/gateway_link.h"
+#include "snap/rate_budget.h"
 #include "snap/recap_server.h"
 #include "snap/snap.h"
 
@@ -179,26 +180,32 @@ TEST_CASE("snap: a gateway restart (new epoch, Sequence from 1) forgets everythi
     CHECK(r.core.source_epoch() == 9);
 }
 
-TEST_CASE("snap: a recap reply is Begin, the definition, Clear, every level, End, all at AsOf") {
+TEST_CASE("snap: a section is Begin naming the instrument, the definition, Clear, every level, End, all at AsOf") {
     Rig r;
     Gateway gw(r.pack, r.ins, r.data, Rig::opts(), nullptr, &r.state);
     sync_btc(gw);
     gw.on_frame(kDiff161, 12);
     std::vector<uint8_t> out;
-    r.core.answer(77, 1, 0, out);
+    CHECK(r.core.want(1, 0, 100) == SnapCore::Want::QUEUED);
+    CHECK_FALSE(r.core.next_section(100, out));                // gathering (20 ms)
+    REQUIRE(r.core.next_section(100 + 20'000'000, out));
     const auto ms = messages(out);
     REQUIRE(ms.size() >= 3);
     sp_proto::RecapBeginDecoder b;
     REQUIRE(b.wrap(ms.front().data(), ms.front().size()));
-    CHECK(b.CorrelationId() == 77); CHECK(b.AsOf() == gw.sequence()); CHECK(b.SourceEpoch() == 7);
+    CHECK(b.CorrelationId() == 1);                             // the section id
+    CHECK(b.Instrument() == 1); CHECK(b.Venue() == 10);
+    CHECK(b.AsOf() == gw.sequence()); CHECK(b.SourceEpoch() == 7);
     sp_proto::RecapEndDecoder e;
     REQUIRE(e.wrap(ms.back().data(), ms.back().size()));
+    CHECK(e.CorrelationId() == 1);
     CHECK(b.RecordCount() == ms.size() - 2); CHECK(e.RecordCount() == ms.size() - 2);
     std::vector<uint16_t> kinds;
     std::vector<uint8_t> actions;
     for (size_t i = 1; i + 1 < ms.size(); ++i) {
         sp_proto::RecapRecordDecoder d;
         REQUIRE(d.wrap(ms[i].data(), ms[i].size()));
+        CHECK(d.CorrelationId() == 1);
         const uint8_t* p = d.Payload_data();
         uint16_t t; std::memcpy(&t, p + 2, 2); kinds.push_back(t);
         uint64_t seq; std::memcpy(&seq, p + kPrefixSequence, 8);
@@ -213,18 +220,63 @@ TEST_CASE("snap: a recap reply is Begin, the definition, Clear, every level, End
     CHECK(kinds.front() == sp_canonical::InstrumentDefinition::kTemplateId);
     CHECK(actions == std::vector<uint8_t>{4, 1, 1, 1});        // Clear, two bids, one ask
     out.clear();
-    r.core.answer(78, 2, 10, out);                             // ETHUSDT: known (its definition), never Ok
-    sp_proto::RecapRejectDecoder rj;
-    REQUIRE(rj.wrap(out.data() + 4, out.size() - 4));
-    CHECK(rj.Reason() == sp_proto::RejectReason::NotReady);
-    out.clear();
-    r.core.answer(79, 99, 0, out);
-    REQUIRE(rj.wrap(out.data() + 4, out.size() - 4));
-    CHECK(rj.Reason() == sp_proto::RejectReason::UnknownInstrument);
-    CHECK(r.core.stats().replies == 1); CHECK(r.core.stats().rejects_not_ready == 1); CHECK(r.core.stats().rejects_unknown == 1);
+    CHECK_FALSE(r.core.next_section(200'000'000, out));        // served: the interest is gone
+    CHECK(r.core.stats().sections == 1);
+    CHECK(r.core.stats().wanted == 0);
+
+    // ETHUSDT is known (its definition) but never Ok: its interest waits. 99 was never seen.
+    CHECK(r.core.want(2, 10, 300'000'000) == SnapCore::Want::QUEUED);
+    CHECK_FALSE(r.core.next_section(400'000'000, out));
+    CHECK(r.core.stats().waiting == 1);
+    CHECK(r.core.stats().wanted == 1);
+    CHECK(r.core.want(99, 0, 400'000'000) == SnapCore::Want::UNKNOWN);
+    CHECK(r.core.stats().requests == 3); CHECK(r.core.stats().rejects_unknown == 1);
 }
 
-TEST_CASE("snap: a book deeper than the snap holds overflows to Stale, and a reply rejects it") {
+TEST_CASE("snap: interest is coalesced in its gather window; one ahead of a bulk; a waiting one goes out once Ok") {
+    Rig r;
+    Gateway gw(r.pack, r.ins, r.data, Rig::opts(), nullptr, &r.state);
+    sync_btc(gw);                                              // BTCUSDT Ok; ETHUSDT known (its definition), not Ok
+    constexpr uint64_t ms = 1'000'000;
+    std::vector<uint8_t> out;
+    // Three agents ask for BTC within 20 ms: one section.
+    CHECK(r.core.want(1, 0, 0) == SnapCore::Want::QUEUED);
+    CHECK(r.core.want(1, 10, 5 * ms) == SnapCore::Want::COALESCED);
+    CHECK(r.core.want(1, 0, 19 * ms) == SnapCore::Want::COALESCED);
+    CHECK_FALSE(r.core.next_section(19 * ms, out));
+    REQUIRE(r.core.next_section(20 * ms, out));
+    out.clear();
+    CHECK_FALSE(r.core.next_section(30 * ms, out));
+    CHECK(r.core.stats().wants_coalesced == 2);
+
+    // A bulk waits its 1 s window; a second bulk inside it joins.
+    r.core.want_all(100 * ms);
+    r.core.want_all(600 * ms);
+    CHECK_FALSE(r.core.next_section(1099 * ms, out));
+    // A single request for BTC during the window goes out after 20 ms, ahead of the bulk.
+    CHECK(r.core.want(1, 0, 1000 * ms) == SnapCore::Want::COALESCED);
+    REQUIRE(r.core.next_section(1020 * ms, out));
+    sp_proto::RecapBeginDecoder b;
+    REQUIRE(b.wrap(out.data() + 4, out.size() - 4));
+    CHECK(b.Instrument() == 1);
+    out.clear();
+    // At the end of the window ETH is due but not Ok: it waits; BTC is not wanted again.
+    CHECK_FALSE(r.core.next_section(1100 * ms, out));
+    CHECK(r.core.stats().waiting == 1);
+    CHECK(r.core.stats().bulk_requests == 2);
+    // ETH becomes Ok (the gateway publishes it whole): its section is out at once.
+    const auto ok = state_frame(7, 2, gw.sequence(), SourceStateCode::Ok);
+    r.core.on_state(ok.data(), ok.size());
+    REQUIRE(r.core.state(2, 10) == SourceStateCode::Ok);
+    REQUIRE(r.core.next_section(1101 * ms, out));
+    REQUIRE(b.wrap(out.data() + 4, out.size() - 4));
+    CHECK(b.Instrument() == 2);
+    CHECK(r.core.stats().waiting == 0);
+    CHECK(r.core.stats().wanted == 0);
+    CHECK(r.core.stats().sections == 3);
+}
+
+TEST_CASE("snap: a book deeper than the snap holds overflows to Stale; its interest waits") {
     Rig r("binance-spot", {"BTCUSDT"}, 16);
     Gateway gw(r.pack, r.ins, r.data, Rig::opts(), nullptr, &r.state);
     gw.on_connected(1);
@@ -235,8 +287,28 @@ TEST_CASE("snap: a book deeper than the snap holds overflows to Stale, and a rep
     CHECK(r.core.stats().book_overflows == 1);
     CHECK(r.core.state(1, 10) != SourceStateCode::Ok);         // its Ok is ignored: this copy is not whole
     std::vector<uint8_t> out;
-    r.core.answer(1, 1, 10, out);
-    CHECK(template_of(messages(out)[0]) == sp_proto::RecapRejectDecoder::kTemplateId);
+    CHECK(r.core.want(1, 10, 0) == SnapCore::Want::QUEUED);
+    CHECK_FALSE(r.core.next_section(1'000'000'000, out));
+    CHECK(r.core.stats().waiting == 1);
+}
+
+TEST_CASE("snap: the token bucket paces bytes, lets an oversized section through when full, and takes refunds") {
+    TokenBucket t(1000, 500);                                  // 1000 B/s, 500 saved up
+    constexpr uint64_t s = 1'000'000'000;
+    CHECK(t.try_take(400, s));
+    CHECK_FALSE(t.try_take(200, s));
+    CHECK(t.try_take(100, s));
+    CHECK_FALSE(t.try_take(1, s));
+    CHECK(t.try_take(100, s + s / 10));                        // 100 ms: 100 bytes
+    CHECK_FALSE(t.try_take(1, s + s / 10));
+    t.give_back(100);
+    CHECK(t.try_take(100, s + s / 10));
+    CHECK(t.try_take(2000, s + s));                            // full again after a second: an oversized one goes...
+    CHECK(t.tokens() < 0);                                     // ...into debt
+    CHECK_FALSE(t.try_take(1, s + s + s));                     // paid off over the next 1.5 s
+    CHECK(t.try_take(1, s + s + 2 * s));
+    TokenBucket unlimited(0, 0);
+    CHECK(unlimited.try_take(1u << 30, 1));
 }
 
 TEST_CASE("snap: RecapServer answers Hello as Snap and unknown requests as Unsupported") {
@@ -266,6 +338,33 @@ TEST_CASE("snap: RecapServer answers Hello as Snap and unknown requests as Unsup
     REQUIRE(sd.wrap(ms[0].data(), ms[0].size()));
     CHECK(sd.Code() == sp_proto::StatusCode::Unsupported); CHECK(sd.CorrelationId() == 4);
     CHECK(s.stats().unsupported == 1);
+}
+
+TEST_CASE("snap: RecapServer turns requests into interest; only an unknown instrument is answered") {
+    Rig r;
+    Gateway gw(r.pack, r.ins, r.data, Rig::opts(), nullptr, &r.state);
+    sync_btc(gw);
+    RecapServer s(r.core, "spwsgw-snap", 5);
+    s.set_time(1000);
+    auto request = [&](uint64_t corr, uint64_t instrument, uint16_t flags) {
+        std::vector<uint8_t> req(4 + 128), reply;
+        sp_proto::RecapRequestEncoder e(req.data() + 4, 128);
+        e.CorrelationId(corr).Instrument(instrument).Flags(flags);
+        const uint32_t n = static_cast<uint32_t>(e.finish());
+        std::memcpy(req.data(), &n, 4); req.resize(4 + n);
+        s.on_frame(req.data(), req.size(), reply);
+        return reply;
+    };
+    CHECK(request(1, 1, 0).empty());
+    CHECK(r.core.stats().wanted == 1);
+    const auto rej = request(2, 99, 0);
+    sp_proto::RecapRejectDecoder rd;
+    REQUIRE(rd.wrap(rej.data() + 4, rej.size() - 4));
+    CHECK(rd.CorrelationId() == 2);
+    CHECK(rd.Reason() == sp_proto::RejectReason::UnknownInstrument);
+    CHECK(request(3, 0, 1).empty());                           // Bulk: every instrument
+    CHECK(r.core.stats().bulk_requests == 1);
+    CHECK(r.core.stats().wanted == 2);
 }
 
 TEST_CASE("snap: the gateway link says Hello, then asks for all, and reads the gateway's replies") {

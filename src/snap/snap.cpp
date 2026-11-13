@@ -182,6 +182,12 @@ void SnapCore::on_data_lost() noexcept { stale_all(); }
 
 void SnapCore::set_state(Inst& in, SourceStateCode s) noexcept {
     in.state = s;
+    if (s == SourceStateCode::Ok && in.want_parked) {
+        // Its section was due while it was not whole: due now that it is.
+        in.want_parked = false;
+        stats_.waiting.set(stats_.waiting - 1);
+        (in.want_single ? singles_ : bulk_).push_back(key(in.id, in.venue));
+    }
     count_states();
 }
 
@@ -238,19 +244,15 @@ const Book* SnapCore::book(uint64_t instrument, uint16_t venue) const noexcept {
 // publish to rebuild the instrument, so an app applies a recap with the same
 // code as the live stream: definition, Clear, every level as Add, then the
 // last quote, trade and status. Each record's Sequence is S, the live sequence
-// the state is consistent with; the agent merges live messages after S.
-void SnapCore::answer(uint64_t correlation, uint64_t instrument, uint16_t venue, std::vector<uint8_t>& out) {
-    ++stats_.requests;
-    const Inst* in = find(instrument, venue);
-    if (!in || in->state != SourceStateCode::Ok) {
-        const auto reason = in ? sp_proto::RejectReason::NotReady : sp_proto::RejectReason::UnknownInstrument;
-        if (in) ++stats_.rejects_not_ready; else ++stats_.rejects_unknown;
-        append<sp_proto::RecapRejectEncoder>(out, 64, [&](sp_proto::RecapRejectEncoder& e) { e.CorrelationId(correlation).Reason(reason); });
-        return;
-    }
+// the state is consistent with; the agent merges live messages after S. A section names its instrument in
+// RecapBegin, so every agent waiting on it can take it.
+void SnapCore::build_section(const Inst& inst, uint64_t correlation, std::vector<uint8_t>& out) {
+    const Inst* in = &inst;
     const uint64_t s = last_seq_;
     const size_t begin = out.size();
-    append<sp_proto::RecapBeginEncoder>(out, 64, [&](sp_proto::RecapBeginEncoder& e) { e.CorrelationId(correlation).AsOf(s).SourceEpoch(epoch_); });
+    append<sp_proto::RecapBeginEncoder>(out, 64, [&](sp_proto::RecapBeginEncoder& e) {
+        e.CorrelationId(correlation).AsOf(s).SourceEpoch(epoch_).Instrument(in->id).Venue(in->venue);
+    });
     uint32_t count = 0;
     auto record = [&](const uint8_t* msg, size_t n) {
         append<sp_proto::RecapRecordEncoder>(out, 8 + 8 + 4 + n, [&](sp_proto::RecapRecordEncoder& e) { e.CorrelationId(correlation).Payload(msg, n); });
@@ -294,7 +296,77 @@ void SnapCore::answer(uint64_t correlation, uint64_t instrument, uint16_t venue,
     append<sp_proto::RecapEndEncoder>(out, 64, [&](sp_proto::RecapEndEncoder& e) { e.CorrelationId(correlation).RecordCount(count); });
     // RecordCount up front too, now that it is known (RecapBegin.RecordCount, root offset 24).
     std::memcpy(out.data() + begin + 4 + sp_proto::kHeaderSize + 24, &count, 4);
-    ++stats_.replies;
+    ++stats_.sections;
+    stats_.section_bytes += out.size() - begin;
+}
+
+SnapCore::Want SnapCore::want(uint64_t instrument, uint16_t venue, uint64_t now) noexcept {
+    ++stats_.requests;
+    auto it = insts_.end();
+    if (venue != 0) {
+        it = insts_.find(key(instrument, venue));
+    } else if (const Inst* hit = find(instrument, 0); hit != nullptr) {
+        it = insts_.find(key(hit->id, hit->venue));
+    }
+    if (it == insts_.end()) { ++stats_.rejects_unknown; return Want::UNKNOWN; }
+    Inst& in = it->second;
+    if (in.want_due != 0 && in.want_single) { ++stats_.wants_coalesced; return Want::COALESCED; }
+    // INTENT: a single request goes ahead of a bulk that already wants the
+    // instrument: an app subscribing now should not wait for the bulk window.
+    const uint64_t due = now + gather_.single_ns;
+    const bool joined = in.want_due != 0;
+    if (!joined) ++stats_.wanted;
+    in.want_due = joined && in.want_due < due ? in.want_due : due;
+    in.want_single = true;
+    if (!in.want_parked) singles_.push_back(it->first);
+    if (joined) { ++stats_.wants_coalesced; return Want::COALESCED; }
+    return Want::QUEUED;
+}
+
+void SnapCore::want_all(uint64_t now) noexcept {
+    ++stats_.bulk_requests;
+    // INTENT: one window per partition, opened by the first bulk: every agent
+    // sees a partition-wide event (a gap on a shared segment, a gateway
+    // restart) at about the same time, and those that ask within it share one
+    // section per instrument.
+    if (bulk_window_ <= now) bulk_window_ = now + gather_.bulk_ns;
+    for (auto& [k, in] : insts_) {
+        if (in.want_due != 0) continue;   // already wanted: the earlier due stands
+        in.want_due = bulk_window_;
+        in.want_single = false;
+        ++stats_.wanted;
+        bulk_.push_back(k);
+    }
+}
+
+SnapCore::Inst* SnapCore::pop_due(std::deque<uint64_t>& q, bool single, uint64_t now) noexcept {
+    while (!q.empty()) {
+        auto it = insts_.find(q.front());
+        if (it == insts_.end() || it->second.want_due == 0 || it->second.want_single != single || it->second.want_parked) {
+            q.pop_front();   // served, moved to the other queue, or waiting to be Ok
+            continue;
+        }
+        if (it->second.want_due > now) return nullptr;   // in due order: the rest are later
+        q.pop_front();
+        if (it->second.state != SourceStateCode::Ok) {
+            it->second.want_parked = true;
+            ++stats_.waiting;
+            continue;
+        }
+        return &it->second;
+    }
+    return nullptr;
+}
+
+bool SnapCore::next_section(uint64_t now, std::vector<uint8_t>& out) {
+    Inst* in = pop_due(singles_, true, now);
+    if (in == nullptr) in = pop_due(bulk_, false, now);
+    if (in == nullptr) return false;
+    in->want_due = 0;
+    in->want_single = false;
+    stats_.wanted.set(stats_.wanted - 1);
+    build_section(*in, ++section_id_, out);
+    return true;
 }
 
 } // namespace feeds

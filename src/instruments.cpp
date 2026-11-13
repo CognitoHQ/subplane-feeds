@@ -37,6 +37,9 @@ bool Instruments::load_file(const std::string& path, bool lower_stream_names, st
                 in.id = kv.second["id"].as<uint32_t>(0);
                 in.base = kv.second["base"].as<std::string>("");
                 in.quote = kv.second["quote"].as<std::string>("");
+                const uint32_t part = kv.second["partition"].as<uint32_t>(1);
+                if (part < 1 || part > 65535) { err = path + ": instrument " + in.symbol + ": partition must be 1..65535"; return false; }
+                in.partition = static_cast<uint16_t>(part);
             } else { err = path + ": instrument " + in.symbol + " must be an id or a mapping"; return false; }
             if (!add(std::move(in), err)) return false;
         }
@@ -58,6 +61,16 @@ bool Instruments::load_symbols(const std::vector<std::string>& symbols, bool low
     }
     if (list_.empty()) { err = "no instruments"; return false; }
     return true;
+}
+
+size_t Instruments::keep_partition(uint16_t n) {
+    std::vector<Instrument> all = std::move(list_);
+    list_.clear();
+    by_symbol_.clear();
+    by_stream_.clear();
+    std::string err;
+    for (auto& in : all) if (in.partition == n) add(std::move(in), err);   // already validated once
+    return list_.size();
 }
 
 const Instrument* Instruments::by_symbol(std::string_view s) const noexcept {

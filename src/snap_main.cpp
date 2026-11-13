@@ -1,9 +1,14 @@
 // spwsgw-snap: a gateway's snapshot service (docs/snap.md). A silent, untethered
 // subscriber of one gateway's canonical data stream and SPP state stream that
-// rebuilds every instrument from the stream alone and answers the agent's
-// RecapRequests. Asks the gateway to Republish what it cannot trust.
+// rebuilds every instrument from the stream alone, takes the agents'
+// RecapRequests as interest, and publishes each wanted instrument once, as a
+// section, on its section stream, paced. Asks the gateway to Republish what it
+// cannot trust.
 //
-//   spwsgw-snap --recap-channel aeron:udp?endpoint=H:P --recap-response H:P
+//   spwsgw-snap --recap-channel aeron:udp?endpoint=H:P --recap-response H:P --section-channel C
+//               [--section-stream 1103] [--section-term-length N] [--section-offer-bytes 65536]
+//               [--section-rate 25000000] [--section-burst 1048576]
+//               [--gather-ms 20] [--bulk-gather-ms 1000]
 //               [--gateway-control aeron:udp?endpoint=H:P --gateway-response H:P]
 //               [--data-channel aeron:ipc] [--data-stream 1001] [--state-stream 1002]
 //               [--recap-stream 1101] [--recap-response-stream 1102]
@@ -17,6 +22,7 @@
 #include "obs/snap_observe.h"
 #include "publisher.h"
 #include "snap/gateway_link.h"
+#include "snap/rate_budget.h"
 #include "snap/recap_server.h"
 #include "snap/snap.h"
 #if FEEDS_WITH_NETWORK
@@ -27,6 +33,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <set>
 #include <string>
@@ -44,7 +51,9 @@ void on_signal(int) { g_stop = 1; }
 uint64_t now_ns() { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count()); }
 
 void usage() {
-    std::fputs("usage: spwsgw-snap --recap-channel aeron:udp?endpoint=H:P --recap-response H:P\n"
+    std::fputs("usage: spwsgw-snap --recap-channel aeron:udp?endpoint=H:P --recap-response H:P --section-channel C\n"
+               "                   [--section-stream N] [--section-term-length N] [--section-offer-bytes N] [--section-rate BYTES_PER_S] [--section-burst BYTES]\n"
+               "                   [--gather-ms N] [--bulk-gather-ms N]\n"
                "                   [--gateway-control aeron:udp?endpoint=H:P --gateway-response H:P]\n"
                "                   [--data-channel C] [--data-stream N] [--state-stream N] [--recap-stream N] [--recap-response-stream N]\n"
                "                   [--gateway-control-stream N] [--gateway-response-stream N] [--recap-term-length N] [--recap-max-pending N]\n"
@@ -63,12 +72,12 @@ std::string untethered(const std::string& ch) {
 void print_stats(const SnapCore& core, const GatewayLink* link, const RecapServer& server, FILE* f) {
     const SnapStats& s = core.stats();
     std::fprintf(f, "spwsgw-snap: messages=%llu gaps=%llu restarts=%llu malformed=%llu states=%llu applied=%llu ignored=%llu overflows=%llu "
-                    "ok=%llu stale=%llu unknown=%llu requests=%llu replies=%llu not_ready=%llu unknown_instrument=%llu asks=%llu seq=%llu",
+                    "ok=%llu stale=%llu unknown=%llu requests=%llu bulk=%llu coalesced=%llu unknown_instrument=%llu sections=%llu waiting=%llu asks=%llu seq=%llu",
                  (unsigned long long)s.messages, (unsigned long long)s.gaps, (unsigned long long)s.restarts, (unsigned long long)s.malformed,
                  (unsigned long long)s.state_messages, (unsigned long long)s.states_applied, (unsigned long long)s.states_ignored, (unsigned long long)s.book_overflows,
                  (unsigned long long)s.instruments_ok, (unsigned long long)s.instruments_stale, (unsigned long long)s.instruments_unknown,
-                 (unsigned long long)s.requests, (unsigned long long)s.replies, (unsigned long long)s.rejects_not_ready, (unsigned long long)s.rejects_unknown,
-                 (unsigned long long)s.republish_asks, (unsigned long long)core.last_sequence());
+                 (unsigned long long)s.requests, (unsigned long long)s.bulk_requests, (unsigned long long)s.wants_coalesced, (unsigned long long)s.rejects_unknown,
+                 (unsigned long long)s.sections, (unsigned long long)s.waiting, (unsigned long long)s.republish_asks, (unsigned long long)core.last_sequence());
     if (link) std::fprintf(f, " republish_sent=%llu gateway_ok=%llu", (unsigned long long)link->stats().republish_sent, (unsigned long long)link->stats().status_ok);
     std::fprintf(f, " reply_dropped=%llu\n", (unsigned long long)server.stats().reply_dropped);
 }
@@ -80,6 +89,7 @@ int main(int argc, char** argv) {
     std::set<std::string> flags;
     const std::set<std::string> boolean = {"embedded-driver", "spin", "quiet", "help"};
     const std::set<std::string> valued = {"recap-channel", "recap-response", "recap-stream", "recap-response-stream", "recap-term-length", "recap-max-pending",
+                                          "section-channel", "section-stream", "section-term-length", "section-offer-bytes", "section-rate", "section-burst", "gather-ms", "bulk-gather-ms",
                                           "gateway-control", "gateway-response", "gateway-control-stream", "gateway-response-stream",
                                           "data-channel", "data-stream", "state-stream", "book-levels", "ask-every-ms", "name", "aeron-dir", "seconds",
                                           "http", "site", "env", "labels"};
@@ -95,7 +105,7 @@ int main(int argc, char** argv) {
     auto get = [&](const char* k, const char* def) { auto it = a.find(k); return it == a.end() ? std::string(def) : it->second; };
     auto getu = [&](const char* k, uint64_t def) { auto it = a.find(k); return it == a.end() ? def : std::strtoull(it->second.c_str(), nullptr, 10); };
     const bool quiet = flags.count("quiet") != 0;
-    if (!a.count("recap-channel") || !a.count("recap-response")) { usage(); return 2; }
+    if (!a.count("recap-channel") || !a.count("recap-response") || !a.count("section-channel")) { usage(); return 2; }
     if (a.count("gateway-control") != a.count("gateway-response")) { std::fputs("spwsgw-snap: --gateway-control and --gateway-response go together\n", stderr); return 2; }
 
     std::signal(SIGINT, on_signal);
@@ -120,16 +130,37 @@ int main(int argc, char** argv) {
     }
 
     SnapCore core(static_cast<uint32_t>(getu("book-levels", Book::kDefaultMaxLevels)));
+    core.set_gather({getu("gather-ms", 20) * 1'000'000ull, getu("bulk-gather-ms", 1000) * 1'000'000ull});
     RecapServer server(core, name, epoch);
+
+    // INTENT: the section stream is shared by every agent on the partition.
+    // A section (a whole book: about 100 bytes a level) goes out in offers of
+    // at most --section-offer-bytes, cut at message boundaries: Aeron's largest
+    // message is an eighth of a term, and smaller offers pace evenly. One
+    // section is finished before the next starts, so sections never
+    // interleave and an agent assembles each across offers. Flow control stays
+    // the channel's (fc=max by default on multicast: a slow agent loses a
+    // section and asks again, it never slows the others); the pace is
+    // --section-rate.
+    std::string section_channel = a["section-channel"];
+    if (section_channel.find("term-length=") == std::string::npos)
+        section_channel += (section_channel.find('?') == std::string::npos ? "?" : "|") + std::string("term-length=") + std::to_string(getu("section-term-length", 4u << 20));
+    const size_t offer_bytes = static_cast<size_t>(getu("section-offer-bytes", 64u << 10));
+    AeronPublication sections;
+    if (!sections.open(client.get(), section_channel, static_cast<int32_t>(getu("section-stream", 1103)), cc.driver_timeout_ms, err)) {
+        std::fprintf(stderr, "spwsgw-snap: section stream: %s\n", err.c_str());
+        return 1;
+    }
+    TokenBucket budget(getu("section-rate", 25'000'000), getu("section-burst", 1u << 20));
     AeronControlConfig rc;
     rc.channel = a["recap-channel"];
     rc.stream_id = static_cast<int32_t>(getu("recap-stream", 1101));
     rc.response_control = a["recap-response"];
     rc.response_stream_id = static_cast<int32_t>(getu("recap-response-stream", 1102));
-    // A reply is a whole book: about 100 bytes a level. The term must hold the
-    // largest reply, and max_pending lets it wait there for a slow requester.
-    rc.term_length = static_cast<uint32_t>(getu("recap-term-length", 16u << 20));
-    rc.max_pending = static_cast<size_t>(getu("recap-max-pending", 16u << 20));
+    // Answers on the response channel are small (Hello, rejects): the books go
+    // out as sections, on the section stream.
+    rc.term_length = static_cast<uint32_t>(getu("recap-term-length", 64u << 10));
+    rc.max_pending = static_cast<size_t>(getu("recap-max-pending", 64u << 10));
     auto recap = make_aeron_control(client.get(), client.dir(), rc, err);
     if (!recap) { std::fprintf(stderr, "spwsgw-snap: %s\n", err.c_str()); return 1; }
 
@@ -144,8 +175,9 @@ int main(int argc, char** argv) {
         if (!gateway.open(client.get(), gc, err)) { std::fprintf(stderr, "spwsgw-snap: gateway control: %s\n", err.c_str()); return 1; }
         link = std::make_unique<GatewayLink>(name, epoch);
     }
-    if (!quiet) std::fprintf(stderr, "spwsgw-snap: data %s streams %d/%d, recap %s; %s\n", data_channel.c_str(), data.stream_id(), state.stream_id(),
-                             recap->describe().c_str(), link ? ("gateway control " + gateway.config().request_channel).c_str() : "no gateway control (no Republish asks)");
+    if (!quiet) std::fprintf(stderr, "spwsgw-snap: data %s streams %d/%d, recap %s, sections %s stream %d; %s\n", data_channel.c_str(), data.stream_id(), state.stream_id(),
+                             recap->describe().c_str(), section_channel.c_str(), sections.stream_id(),
+                             link ? ("gateway control " + gateway.config().request_channel).c_str() : "no gateway control (no Republish asks)");
 
     // Observability (docs/observability.md): the HTTP thread reads only OneWriter values.
     SnapLive live;
@@ -210,7 +242,9 @@ int main(int argc, char** argv) {
     const uint64_t stop_at = a.count("seconds") ? now_ns() + getu("seconds", 0) * 1'000'000'000ull : 0;
     const bool spin = flags.count("spin") != 0;
     uint64_t lost_seen = 0, last_report = now_ns();
-    std::vector<uint8_t> frame;
+    std::vector<uint8_t> frame, section;
+    size_t section_at = 0;         // how much of `section` is out
+    bool section_waited = false;   // counted once per section, however long it waits
     while (!g_stop) {
         int work = data.poll([](void* c, const uint8_t* b, size_t n) { static_cast<SnapCore*>(c)->on_data(b, n); }, &core, 64);
         if (const uint64_t lost = data.images_lost(); lost != lost_seen) { lost_seen = lost; core.on_data_lost(); }
@@ -218,8 +252,46 @@ int main(int argc, char** argv) {
         // INTENT: after the data poll, so a state is usually seen with its data already applied.
         work += state.poll([](void* c, const uint8_t* b, size_t n) { static_cast<SnapCore*>(c)->on_state(b, n); }, &core, 16);
         live.state_images.set(static_cast<uint64_t>(state.images()));
+        server.set_time(now_ns());
         work += recap->poll(server, 16);
         const uint64_t now = now_ns();
+        // One section at a time: the next one is chosen (single interest first)
+        // only when this one is out, so a request that arrives meanwhile still
+        // goes ahead of the rest of a bulk.
+        if (section.empty() && core.next_section(now, section)) { section_at = 0; section_waited = false; }
+        if (!section.empty()) {
+            // The next offer: whole SPP messages (u32 length + message) up to offer_bytes, at least one.
+            size_t end = section_at;
+            while (end < section.size()) {
+                uint32_t n = 0;
+                std::memcpy(&n, section.data() + end, 4);
+                if (end != section_at && end + 4 + n - section_at > offer_bytes) break;
+                end += 4 + n;
+            }
+            const size_t len = end - section_at;
+            if (!budget.try_take(len, now)) {
+                if (!section_waited) { ++live.sections_throttled; section_waited = true; }
+            } else {
+                switch (sections.offer(section.data() + section_at, len)) {
+                case AeronPublication::Result::OK:
+                    live.section_bytes_offered += len;
+                    section_at = end;
+                    if (section_at == section.size()) { ++live.sections_offered; section.clear(); }
+                    ++work;
+                    break;
+                case AeronPublication::Result::BACK_PRESSURED:
+                    budget.give_back(len);
+                    if (!section_waited) { ++live.sections_back_pressured; section_waited = true; }
+                    break;
+                default:   // nobody subscribes, or the publication is gone: the agents ask again on their timeout
+                    budget.give_back(len);
+                    ++live.sections_dropped;
+                    section.clear();
+                    break;
+                }
+            }
+        }
+        live.sections_connected.set(sections.connected() ? 1 : 0);
         if (link) {
             work += gateway.poll([](void* c, const uint8_t* b, size_t n) { static_cast<GatewayLink*>(c)->on_reply(b, n); }, link.get(), 16);
             live.gateway_connected.set(gateway.connected() ? 1 : 0);
@@ -238,6 +310,7 @@ int main(int argc, char** argv) {
     http.stop();   // INTENT: before the closes: the handler reads stats the closes do not outlive
 #endif
     recap->close();
+    sections.close();
     gateway.close();
     state.close();
     data.close();

@@ -6,7 +6,11 @@
 //
 //   instruments:
 //     BTCUSDT: { id: 1, base: BTC, quote: USDT }
-//     ETHUSDT: 2
+//     ETHUSDT: { id: 2, partition: 2 }   # partition_num within the topic; default 1
+//     SOLUSDT: 3
+//
+// A topic split into partitions runs one gateway per partition
+// (`--topic T --partition n`), each publishing only its own instruments.
 
 #include <cstdint>
 #include <string>
@@ -21,6 +25,7 @@ struct Instrument {
     std::string symbol;          // venue symbol as the exchange spells it (BTCUSDT)
     std::string stream_symbol;   // as used in stream names (btcusdt)
     std::string base, quote;
+    uint16_t    partition = 1;   // the topic partition that publishes it
 };
 
 class Instruments {
@@ -31,6 +36,8 @@ public:
     const Instrument* by_stream_symbol(std::string_view s) const noexcept;
     const std::vector<Instrument>& all() const noexcept { return list_; }
     bool empty() const noexcept { return list_.empty(); }
+    // Keeps only the instruments of partition `n`; returns how many remain.
+    size_t keep_partition(uint16_t n);
 
 private:
     bool add(Instrument in, std::string& err);

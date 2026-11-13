@@ -38,6 +38,12 @@ if(FEEDS_WITH_AERON)
         COMMAND ${CMAKE_SOURCE_DIR}/tests/recap_storm_e2e.sh $<TARGET_FILE:spwsgw> $<TARGET_FILE:spwsgw-snap> "${SUBPLANE_BUILD_DIR}"
                 ${CMAKE_SOURCE_DIR}/packs/coinbase-exchange.yaml ${CMAKE_SOURCE_DIR}/fixtures/coinbase-exchange ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml 65536)
     set_tests_properties(recap_storm_coinbase PROPERTIES SKIP_RETURN_CODE 77)
+    # Recap per partition: 2 partitions, a gateway and a snap each, 3 agents; one section per
+    # instrument per step, a gateway restart resynced in bulk on its partition only.
+    add_test(NAME partition_recap_coinbase
+        COMMAND ${CMAKE_SOURCE_DIR}/tests/partition_recap_e2e.sh $<TARGET_FILE:spwsgw> $<TARGET_FILE:spwsgw-snap> "${SUBPLANE_BUILD_DIR}"
+                ${CMAKE_SOURCE_DIR}/packs/coinbase-exchange.yaml ${CMAKE_SOURCE_DIR}/fixtures/coinbase-exchange ${CMAKE_SOURCE_DIR}/contract/subplane_canonical.xml 65536)
+    set_tests_properties(partition_recap_coinbase PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 # The observability HTTP routes (needs the network build for the server).

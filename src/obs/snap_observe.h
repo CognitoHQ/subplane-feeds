@@ -22,6 +22,11 @@ namespace feeds {
 struct SnapLive {
     OneWriter data_images, state_images;   // images on the gateway's data and state streams
     OneWriter gateway_connected;           // 1 while the gateway's control channel takes requests
+    OneWriter sections_offered, section_bytes_offered;   // sections the section stream took
+    OneWriter sections_back_pressured;     // offers retried: a subscriber is behind (flow control)
+    OneWriter sections_dropped;            // not delivered: nobody subscribed, or the publication failed
+    OneWriter sections_throttled;          // waits for the rate budget (--section-rate)
+    OneWriter sections_connected;          // 1 while an agent subscribes to the section stream
 };
 
 // The endpoints, keyed by the endpoint-key rules, and how each is described.
