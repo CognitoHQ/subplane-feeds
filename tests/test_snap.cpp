@@ -9,6 +9,8 @@
 
 #include <cstring>
 #include <set>
+#include <string>
+#include <unistd.h>
 
 using namespace feeds;
 using sp_proto::SourceStateCode;
@@ -365,6 +367,112 @@ TEST_CASE("snap: RecapServer turns requests into interest; only an unknown instr
     CHECK(request(3, 0, 1).empty());                           // Bulk: every instrument
     CHECK(r.core.stats().bulk_requests == 1);
     CHECK(r.core.stats().wanted == 2);
+}
+
+namespace {
+// An instruments file with `n` instruments: ids 1..n, every third on partition 2.
+Instruments instruments_file(int n) {
+    char path[] = "/tmp/snap_resolve_XXXXXX";
+    const int fd = mkstemp(path);
+    REQUIRE(fd >= 0);
+    std::string y = "instruments:\n";
+    for (int i = 1; i <= n; ++i) y += "  S" + std::to_string(i) + ": { id: " + std::to_string(i) + (i % 3 == 0 ? ", partition: 2" : "") + " }\n";
+    REQUIRE(write(fd, y.data(), y.size()) == static_cast<ssize_t>(y.size()));
+    close(fd);
+    Instruments ins;
+    std::string err;
+    REQUIRE_MESSAGE(ins.load_file(path, false, err), err);
+    unlink(path);
+    return ins;
+}
+template <class Enc, class F> std::vector<uint8_t> frame(F fill) {
+    std::vector<uint8_t> req(4 + 256);
+    Enc e(req.data() + 4, 256);
+    fill(e);
+    const uint32_t n = static_cast<uint32_t>(e.finish());
+    REQUIRE(n != 0);
+    std::memcpy(req.data(), &n, 4);
+    req.resize(4 + n);
+    return req;
+}
+std::vector<uint8_t> ask(RecapServer& s, const std::vector<uint8_t>& req) {
+    std::vector<uint8_t> reply;
+    s.on_frame(req.data(), req.size(), reply);
+    return reply;
+}
+} // namespace
+
+TEST_CASE("snap: Resolve answers from the instruments file: the whole topic in pages, one by id or name, unknown refused") {
+    SnapCore core;
+    RecapServer s(core, "spwsgw-snap", 5);
+    const auto whole = frame<sp_proto::ResolveEncoder>([](auto& e) { e.CorrelationId(9).Name(std::string_view{}); });
+    // Without --instruments a snap does not resolve.
+    auto ms = messages(ask(s, whole));
+    REQUIRE(ms.size() == 1);
+    CHECK(template_of(ms[0]) == sp_proto::StatusDecoder::kTemplateId);
+
+    const Instruments ins = instruments_file(300);
+    s.set_directory({.list = &ins, .topic_id = 11, .partitions = 2, .partition = 1, .venue = 4});
+    ms = messages(ask(s, whole));
+    REQUIRE(ms.size() == 3);                                   // 128 + 128 + 44
+    size_t total = 0;
+    for (size_t i = 0; i < ms.size(); ++i) {
+        sp_proto::ResolveReplyDecoder d;
+        REQUIRE(d.wrap(ms[i].data(), ms[i].size()));
+        CHECK(d.CorrelationId() == 9);
+        CHECK(d.TopicId() == 11);
+        CHECK(d.Partitions() == 2);
+        CHECK((d.Flags() & 1) == (i + 1 == ms.size() ? 1 : 0));   // Last on the final page only
+        for (uint16_t k = 0; k < d.Instruments_count(); ++k) {
+            const auto v = d.Instruments(k);
+            CHECK(v.Venue() == 4);
+            CHECK(v.Partition() == (v.Instrument() % 3 == 0 ? 2 : 1));
+            CHECK(v.Symbol() == "S" + std::to_string(v.Instrument()));
+        }
+        total += d.Instruments_count();
+    }
+    CHECK(total == 300);
+    CHECK(s.stats().resolves == 1);
+
+    ms = messages(ask(s, frame<sp_proto::ResolveEncoder>([](auto& e) { e.CorrelationId(10).Name("S6"); })));
+    REQUIRE(ms.size() == 1);
+    sp_proto::ResolveReplyDecoder one;
+    REQUIRE(one.wrap(ms[0].data(), ms[0].size()));
+    REQUIRE(one.Instruments_count() == 1);
+    CHECK(one.Instruments(0).Instrument() == 6);
+    CHECK(one.Instruments(0).Partition() == 2);
+    ms = messages(ask(s, frame<sp_proto::ResolveEncoder>([](auto& e) { e.CorrelationId(11).Instrument(7).Name(std::string_view{}); })));
+    REQUIRE(one.wrap(ms[0].data(), ms[0].size()));
+    CHECK(one.Instruments(0).Symbol() == "S7");
+
+    for (const auto& unknown : {frame<sp_proto::ResolveEncoder>([](auto& e) { e.CorrelationId(12).Name("NOPE"); }),
+                                frame<sp_proto::ResolveEncoder>([](auto& e) { e.CorrelationId(12).Instrument(999).Name(std::string_view{}); }),
+                                frame<sp_proto::ResolveEncoder>([](auto& e) { e.CorrelationId(12).Instrument(1).Venue(5).Name(std::string_view{}); })}) {
+        ms = messages(ask(s, unknown));
+        REQUIRE(ms.size() == 1);
+        sp_proto::RecapRejectDecoder rd;
+        REQUIRE(rd.wrap(ms[0].data(), ms[0].size()));
+        CHECK(rd.CorrelationId() == 12);
+        CHECK(rd.Reason() == sp_proto::RejectReason::UnknownInstrument);
+    }
+}
+
+TEST_CASE("snap: with an instruments file, a RecapRequest for another partition's instrument is refused at once") {
+    SnapCore core;
+    RecapServer s(core, "spwsgw-snap", 5);
+    const Instruments ins = instruments_file(6);
+    s.set_directory({.list = &ins, .topic_id = 11, .partitions = 2, .partition = 1});
+    s.set_time(1000);
+    auto request = [&](uint64_t corr, uint64_t instrument) {
+        return messages(ask(s, frame<sp_proto::RecapRequestEncoder>([&](auto& e) { e.CorrelationId(corr).Instrument(instrument); })));
+    };
+    auto ms = request(1, 3);                                   // partition 2's
+    REQUIRE(ms.size() == 1);
+    CHECK(template_of(ms[0]) == sp_proto::RecapRejectDecoder::kTemplateId);
+    ms = request(2, 42);                                       // not in the file
+    REQUIRE(ms.size() == 1);
+    CHECK(s.stats().not_here == 2);
+    CHECK(core.stats().wanted == 0);
 }
 
 TEST_CASE("snap: the gateway link says Hello, then asks for all, and reads the gateway's replies") {

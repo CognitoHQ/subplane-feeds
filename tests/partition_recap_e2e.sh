@@ -2,10 +2,14 @@
 # Recap per partition, end to end, with everything plural: one topic in two partitions, a gateway
 # and a spwsgw-snap per partition, three agents. Both gateways replay the same recording, each
 # publishing only its own instruments (instruments.yaml `partition:`): BTC-USD on /1, ETH-USD on /2.
-# Each snap publishes sections on its own section stream, which all three agents read.
-#  1. Each agent adds a recap session for both instruments (one reload each, together). Each agent
-#     asks only the partition it saw the instrument on, and each snap publishes its instrument once
-#     for all three agents (--gather-ms coalesces their requests).
+# Each snap publishes sections on its own section stream, which all three agents read. Each snap
+# reads the instruments file too, and /1's is the topic's resolver (SPP Resolve) for every agent.
+#  0. Every agent gets the topic's list from the resolver: two instruments, two partitions.
+#  1. Before any data, each agent adds a recap session for both instruments, by name (BTC-USD,
+#     ETH-USD; agent c by id and name), one reload each, together. No agent has seen either
+#     instrument, so the resolver's list is what sends each request to its home partition only.
+#     The snaps hold the interest until their books are whole, then each publishes its instrument
+#     once for all three agents (--gather-ms coalesces their requests).
 #  2. Gateway /1 restarts. Every agent sees the publisher restart on /1 and sends one bulk resync to
 #     /1's snap; the snap coalesces them (--bulk-gather-ms) and publishes BTC-USD once more, when its
 #     book is whole again. ETH-USD on /2 is not touched.
@@ -25,6 +29,8 @@ http_get() ( trap '' PIPE; exec 3<>"/dev/tcp/127.0.0.1/$1" 2>/dev/null || return
 http_post() ( trap '' PIPE; exec 3<>"/dev/tcp/127.0.0.1/$1" 2>/dev/null || return 1; printf 'POST %s HTTP/1.0\r\nContent-Length: 0\r\n\r\n' "$2" >&3 || return 1; tr -d '\r' <&3 | sed '1,/^$/d'; exec 3<&- )
 # A counter of one partition (crypto/1 or crypto/2) from /partitions.
 pcounter() { echo "$1" | tr '{' '\n' | grep -A1 "\"name\":\"$2\"" | tr ',' '\n' | grep -o "\"$3\":[0-9]*" | head -1 | cut -d: -f2; }
+# A counter in a partition's nested "resolver":{...} object (pcounter reads only the first two).
+rcounter() { echo "$1" | sed 's/{"name":/\n&/g' | grep "\"name\":\"$2\"" | grep -o '"resolver":{[^}]*}' | grep -o "\"$3\":[0-9]*" | head -1 | cut -d: -f2; }
 counter() { echo "$1" | grep -o "\"$3\":[0-9]*" | sed -n "$2p" | cut -d: -f2; }   # the Nth occurrence: partitions in order
 BASE=$(( 20000 + (RANDOM % 3000) * 12 ))
 REQ1=$((BASE + 3)); RSP1=$((BASE + 4)); REQ2=$((BASE + 5)); RSP2=$((BASE + 6))
@@ -56,7 +62,14 @@ topics:
       symbol_id_mode: table
       messages: [ { template: 1, msg_type: TRADE }, { template: 2, msg_type: QUOTE }, { template: 3, msg_type: BOOK_UPDATE }, { template: 4, msg_type: BOOK_SNAPSHOT }, { template: 5, msg_type: OHLCV }, { template: 6, msg_type: STATUS }, { template: 10, msg_type: DEFINITION }, { template: 100, admin: HEARTBEAT } ]
     heartbeat_timeout_ms: 5000
-    recap: { type: aeron, aeron_dir: "$ADIR", timeout_ms: 3000, coalesce_ms: 0, reply_slab_bytes: 16777216 }
+    # hold_bytes: a pre-data session holds the replay burst (~80k messages) until the first section.
+    recap: { type: aeron, aeron_dir: "$ADIR", timeout_ms: 10000, coalesce_ms: 0, reply_slab_bytes: 16777216, hold_bytes: 67108864 }
+    resolver:
+      type: aeron
+      aeron_dir: "$ADIR"
+      request:  { channel: "aeron:udp?endpoint=127.0.0.1:$REQ1", stream_id: 1101 }
+      response: { channel: "aeron:udp?control-mode=response|control=127.0.0.1:$RSP1", stream_id: 1102 }
+      refresh_ms: 2000
     partitions:
       - recap:
           request:  { channel: "aeron:udp?endpoint=127.0.0.1:$REQ1", stream_id: 1101 }
@@ -69,7 +82,9 @@ topics:
 sessions:
   - { name: live, ring: { capacity_mb: 64, max_payload: 4096 }, topics: [crypto], symbols: ["*"], msg_types: [], deliver: { bus_admin: true, agent_control: true } }
 YAML
-[ "$2" = yes ] && echo "  - { name: late, recap: true, ring: { capacity_mb: 64, max_payload: 4096 }, topics: [crypto], symbols: [1, 2], msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
+local syms='[BTC-USD, ETH-USD]'
+[ "$1" = pre2ec ] && syms='[1, ETH-USD]'
+[ "$2" = yes ] && echo "  - { name: late, recap: true, ring: { capacity_mb: 64, max_payload: 4096 }, topics: [crypto], symbols: $syms, msg_types: [], deliver: { bus_admin: true, agent_control: true } }"
 cat <<YAML
 fanout: { ring_dir: /dev/shm }
 control: { socket_path: $TMP/$1.sock, fallback_socket_path: $TMP/$1.sock, linger_ms: 1000 }
@@ -93,6 +108,7 @@ snap() {   # $1 = partition: its data stream, state stream, recap ports, section
   "$SNAP" --aeron-dir "$ADIR" --data-channel aeron:ipc --data-stream $(( (11 << 16) | $1 )) --state-stream $state --name "snap$1" \
           --recap-channel "aeron:udp?endpoint=127.0.0.1:$req" --recap-response "127.0.0.1:$rsp" --section-channel aeron:ipc --section-stream $sec \
           --gateway-control "aeron:udp?endpoint=127.0.0.1:$ctl" --gateway-response "127.0.0.1:$ctlr" \
+          --instruments "$TMP/instruments.yaml" --pack "$PACK" --topic crypto --topic-registry "$TMP/topics.yaml" --partition "$1" \
           --book-levels "$LEVELS" --ask-every-ms 200 --gather-ms 1000 --bulk-gather-ms 1000 > "$TMP/snap$1.log" 2>&1 &
 }
 snap 1; SNAP1=$!
@@ -107,9 +123,6 @@ gateway() {   # $1 = partition, $2 = log suffix
         --out aeron --channel aeron:ipc --state-stream $state --aeron-dir "$ADIR" --replay "$REC/frames.jsonl" \
         --control-channel "aeron:udp?endpoint=127.0.0.1:$ctl" --control-response "127.0.0.1:$ctlr" --seconds 8 > "$TMP/gw$1$2.log" 2>&1 &
 }
-gateway 1 a; GW1=$!
-gateway 2 a; GW2=$!
-sleep 3
 
 book() {   # views_app lines -> the final book of instrument $1, one "side px qty" line per level, sorted
   awk -v iid="$1" '$1 == "book" {
@@ -149,14 +162,32 @@ merged() {
   fail "partition /$1: not every agent merged $2 recaps: $(for a in $AGENTS; do http_get "$(api "$a")" /partitions; echo; done)"
 }
 
-# 1. The three agents add their recap sessions together.
+# 0. Every agent has the topic's list from the resolver.
+for a in $AGENTS; do
+  for _ in $(seq 1 100); do P=$(http_get "$(api "$a")" /partitions); [ "$(rcounter "$P" crypto/1 resolver_lists)" -ge 1 ] 2>/dev/null && break; sleep 0.1; done
+  [ "$(rcounter "$P" crypto/1 resolver_lists)" -ge 1 ] 2>/dev/null || fail "agent $a got no list from the resolver: $P"
+  [ "$(rcounter "$P" crypto/1 resolver_instruments)" = 2 ] || fail "agent $a: the resolver listed $(rcounter "$P" crypto/1 resolver_instruments) instruments, not 2: $P"
+  [ "$(rcounter "$P" crypto/1 resolver_mismatch)" = 0 ] || fail "agent $a: the resolver disagrees with the config: $P"
+done
+
+# 1. Before any data, the three agents add their recap sessions together, by name.
 for a in $AGENTS; do config "$a" yes > "$TMP/$a.yaml"; done
 for a in $AGENTS; do http_post "$(api "$a")" /reload > "$TMP/reload.$a.out" 2>&1 || fail "reload $a: $(cat "$TMP/reload.$a.out")"; done
+sleep 0.5
+for a in $AGENTS; do
+  P=$(http_get "$(api "$a")" /partitions)
+  for p in 1 2; do
+    [ "$(pcounter "$P" "crypto/$p" recap_requests)" = 1 ] || fail "agent $a asked partition /$p $(pcounter "$P" "crypto/$p" recap_requests) times before any data (once: the list names each instrument's home): $P"
+  done
+done
+gateway 1 a; GW1=$!
+gateway 2 a; GW2=$!
 merged 1 1
 merged 2 1
 for a in $AGENTS; do
   P=$(http_get "$(api "$a")" /partitions)
   for p in 1 2; do
+    [ "$(pcounter "$P" "crypto/$p" recap_hold_overflows)" = 0 ] || fail "agent $a overflowed its hold on /$p waiting for the first section (raise hold_bytes): $P"
     [ "$(pcounter "$P" "crypto/$p" recap_requests)" = 1 ] || fail "agent $a asked partition /$p $(pcounter "$P" "crypto/$p" recap_requests) times (once: only its own instrument): $P"
     [ "$(pcounter "$P" "crypto/$p" recap_elsewhere)" = 0 ] || fail "agent $a asked /$p for an instrument it does not have: $P"
   done
@@ -171,6 +202,7 @@ merged 1 2
 for a in $AGENTS; do
   P=$(http_get "$(api "$a")" /partitions)
   [ "$(pcounter "$P" crypto/1 recap_bulk_requests)" -ge 1 ] || fail "agent $a sent no bulk resync to /1 after its restart: $P"
+  [ "$(pcounter "$P" crypto/1 recap_timeouts)" = 0 ] || fail "agent $a timed out on /1: the restarted stream's section was not taken at once: $P"
   [ "$(pcounter "$P" crypto/2 recap_merged)" = 1 ] || fail "agent $a recapped /2 again, which did not restart: $P"
 done
 wait $GW1 || fail "gateway /1 (restarted) exit $?"
@@ -186,5 +218,10 @@ echo "$S1" | grep -q " sections=2 " || fail "snap /1 did not publish BTC-USD onc
 echo "$S2" | grep -q " requests=3 " || fail "snap /2 did not see one request per agent: $S2"
 echo "$S2" | grep -q " bulk=0 " || fail "snap /2 was asked for a resync: $S2"
 echo "$S2" | grep -q " sections=1 " || fail "snap /2 did not publish ETH-USD once: $S2"
-for s in "$S1" "$S2"; do echo "$s" | grep -q " unknown_instrument=0 " || fail "a snap was asked for an instrument it does not have: $s"; done
-echo "PASS: 2 partitions x 3 agents: each snap published its instrument once per step, every agent asked only its own partition, and every recap session's books equal the live ones"
+for s in "$S1" "$S2"; do
+  echo "$s" | grep -q " unknown_instrument=0 " || fail "a snap was asked for an instrument it does not have: $s"
+  echo "$s" | grep -q " not_here=0 " || fail "a snap was asked for another partition's instrument: $s"
+done
+R1=$(echo "$S1" | grep -o ' resolves=[0-9]*' | cut -d= -f2)
+[ "${R1:-0}" -ge 3 ] || fail "snap /1 (the resolver) answered ${R1:-0} Resolves, fewer than one per agent: $S1"
+echo "PASS: 2 partitions x 3 agents: the resolver listed the topic for every agent, sessions by name asked each instrument's home only before any data, each snap published its instrument once per step, and every recap session's books equal the live ones"
