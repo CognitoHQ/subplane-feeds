@@ -16,7 +16,8 @@ spwsgw-snap --recap-channel aeron:udp?endpoint=SNAPHOST:40500 --recap-response S
             [--recap-stream 1101] [--recap-response-stream 1102] [--gateway-control-stream 1003] [--gateway-response-stream 1004] \
             [--recap-term-length 65536] [--recap-max-pending 65536] [--book-levels 5000] [--ask-every-ms 1000] \
             [--name spwsgw-snap] [--aeron-dir D] [--embedded-driver] [--seconds N] [--spin] [--quiet]
-            [--http 127.0.0.1:9102] [--site S] [--env E] [--labels k=v,...]
+            [--http 127.0.0.1:9102] [--site S] [--env E] [--labels k=v,...] \
+            [--instruments F --pack P [--registry R] --topic T --topic-registry F [--partition 1]]
 ```
 
 - **Data and state:** the gateway's `--channel`, its stream (`--stream-id`, or the one `--topic` derives: `topic_id << 16 | partition_num`, e.g. 720897 for `crypto.binance-spot`) and `--state-stream`. The state stream is on the same channel; keep it below 65536, where no topic's stream can be.
@@ -27,11 +28,13 @@ spwsgw-snap --recap-channel aeron:udp?endpoint=SNAPHOST:40500 --recap-response S
 - **Pacing:** `--section-rate` bytes per second (0 = unlimited) with `--section-burst` saved up; a section goes in offers of at most `--section-offer-bytes`, cut at message boundaries, each taken from the budget. A section is a whole book, about 100 bytes a level; the agent's `recap.reply_slab_bytes` (1 MiB by default) bounds what it accepts, about 10,000 levels.
 - **Gather windows:** `--gather-ms` (20) for an instrument's first single request, `--bulk-gather-ms` (1000) for a bulk; interest that arrives within the window shares the one section.
 
+- **Resolver** (optional): the gateway's own `--instruments` file (every partition's instruments), `--pack` (and `--registry`) for the venue id it stamps, `--topic` and `--topic-registry` for the topic id, and `--partition`, this snap's. With them the snap answers SPP `Resolve` (below), takes interest in its own partition's instruments before it has seen them, and refuses at once (`not_here`) an instrument the file puts on another partition or does not list. Any of a topic's snaps can be its resolver, since each reads the whole file; point the agent's topic `resolver:` at one of them, on its recap request channel.
+
 - **`--http`:** `/metrics`, `/metrics?format=json`, `/topology` and `/health` ([observability.md](observability.md), "The snapshot service's metrics"). `--name` is the `instance`. Needs the network build (Boost.Beast), as the gateway's does.
 
 Stats are printed every minute and on exit.
 
-**Deploying:** `deploy/systemd/spwsgw-snap@.service`, one instance per gateway (`spwsgw-snap@binance-spot`), its flags from `/etc/subplane/snap-<instance>.env` (`deploy/systemd/snap.env.example`). With an `aeron:ipc` data channel the snap shares the gateway's driver directory, so it runs on the gateway's box. Restarting it is safe: it starts Unknown and asks for a Republish; interest in an instrument it knows waits until that instrument is whole, and one it has not seen yet is refused `UnknownInstrument` (the agent retries).
+**Deploying:** `deploy/systemd/spwsgw-snap@.service`, one instance per gateway (`spwsgw-snap@binance-spot`), its flags from `/etc/subplane/snap-<instance>.env` (`deploy/systemd/snap.env.example`). With an `aeron:ipc` data channel the snap shares the gateway's driver directory, so it runs on the gateway's box. Restarting it is safe: it starts Unknown and asks for a Republish; interest in an instrument it knows waits until that instrument is whole, and one it has not seen yet is refused `UnknownInstrument` (the agent retries). With `--instruments`, its partition's instruments count as known from the start, so their interest waits instead.
 
 ## State per instrument
 
@@ -61,7 +64,7 @@ Recap here is interest, not request and reply. A `RecapRequest` for an instrumen
 - **Single** interest is due `--gather-ms` after the first request for the instrument; more requests for it meanwhile join (`coalesced`). It goes out ahead of bulk.
 - **Bulk** opens one window of `--bulk-gather-ms` for the partition: every agent sees a gap or a gateway restart at about the same time, and those that ask within the window share one section per instrument. An instrument already wanted keeps its earlier due time.
 - **Not Ok yet** (a restart, a resync): its interest waits (`subplane_snap_recap_waiting`) and the section goes out once the instrument is Ok. No `NotReady`, so no retry from every agent.
-- **Unknown** (never seen: another partition's, or not published yet): `RecapReject{UnknownInstrument}` on the requester's response channel. On a topic with several partitions the agent asks each partition until it has seen where an instrument lives, and treats this as "not here".
+- **Unknown** (never seen: another partition's, or not published yet): `RecapReject{UnknownInstrument}` on the requester's response channel. On a topic with several partitions the agent asks each partition until it knows where an instrument lives (from the data, or the resolver's list), and treats this as "not here". With `--instruments`, an instrument of another partition, or not in the file, is refused this way at once (`not_here`), and one of this partition's waits for its data.
 - **One at a time:** the next section is chosen when the last is out, so a single request that arrives during a long bulk still goes next.
 
 A section, each message with the section id as `CorrelationId`:
@@ -76,6 +79,14 @@ A section, each message with the section id as `CorrelationId`:
 
 An app applies these with the same code as the live stream, and the agent merges the live messages after S. `Hello` is answered `Hello{Role=Snap}`; anything else gets the SPP evolution rules (`Status{Unsupported}` when it has a CorrelationId).
 
+## Resolve
+
+With `--instruments`, `Resolve` is answered from the file (`docs/protocol/subplane-protocol.md` in subplane, "Resolve"):
+- **By `Name`** (the venue symbol as in the file, `BTCUSDT`) or by `Instrument` (and `Venue`): one `ResolveReply` with that instrument and Last set.
+- **The whole topic** (`Instrument` 0, empty `Name`): every instrument of the file, 128 to a reply (about 6 KiB, under the response term's maximum message), the last with Last.
+- Every reply carries `TopicId` and `Partitions` (the highest `partition:` in the file). Each instrument carries its `partition:` (its home), the pack's venue id, and its symbol.
+- An unknown name or id: `RecapReject{UnknownInstrument}`. Without `--instruments`: `Status{Unsupported}`.
+
 ## Tested
 
 - `tests/test_snap.cpp` drives the real gateway into a `SnapCore`:
@@ -85,10 +96,11 @@ An app applies these with the same code as the live stream, and the agent merges
   - the section layout through the vendored decoders;
   - interest: the gather windows, single ahead of bulk, waiting until Ok, unknown instruments;
   - the token bucket;
-  - the recap server and the gateway link.
+  - the recap server and the gateway link;
+  - Resolve: paged whole topic, by name, by id, unknown; another partition's instrument refused at once.
 - `tests/snap_e2e.sh` (ctest `snap_e2e_binance_spot`, needs `-DSUBPLANE_BUILD_DIR`) runs the gateway replay, the agent with a recap partition, and spwsgw-snap:
   - a recap session added after the replay (`POST /reload`) ends with the same book as a session that read the stream from the start, level by level (about 2,000 levels on a Binance recording);
   - then the gateway runs again (a restart: new epoch, `Sequence` from 1). The snap counts one restart, holds interest while it rebuilds, and a second recap session again ends with the live session's book;
   - in a network build (every `scripts/dev.sh` build) it also scrapes the snap's `/metrics`, lints it and the agent's with promtool (installed in the image and CI) and checks that its `/topology` joins the agent's on the recap and data keys.
 - `tests/recap_storm_e2e.sh` (ctest `recap_storm_coinbase`, needs `-DSUBPLANE_BUILD_DIR`): 16 recap sessions added by one reload, all on the same 2 instruments, reach the snap as exactly 2 requests (the agent's `recap.coalesce_ms`) and 2 sections, and every session ends with the live session's books.
-- `tests/partition_recap_e2e.sh` (ctest `partition_recap_coinbase`, needs `-DSUBPLANE_BUILD_DIR`): one topic in two partitions, a gateway and a snap each (BTC-USD on /1, ETH-USD on /2), three agents. Each agent asks only the partition it saw an instrument on; each snap publishes its instrument once for all three. Then gateway /1 restarts: every agent sends one bulk resync to /1, the snap publishes BTC-USD once more, and /2 is not touched. Every recap session ends with its live session's books.
+- `tests/partition_recap_e2e.sh` (ctest `partition_recap_coinbase`, needs `-DSUBPLANE_BUILD_DIR`): one topic in two partitions, a gateway and a snap each (BTC-USD on /1, ETH-USD on /2), three agents, with snap /1 the topic's resolver. Every agent gets the list (two instruments, two partitions). Before any data, each adds a recap session by name (`BTC-USD`, `ETH-USD`) and asks each instrument's home partition only, once; each snap holds the interest until its book is whole and publishes its instrument once for all three. Then gateway /1 restarts: every agent sends one bulk resync to /1 and takes the section the snap publishes once more, with no timeout, and /2 is not touched. No snap refuses a request as another partition's. Every recap session ends with its live session's books.

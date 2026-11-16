@@ -24,6 +24,7 @@ struct ControlStats {
     OneWriter hellos, republish, status, unsupported; // messages by kind; unsupported = answered Status{Unsupported}
     OneWriter replies, reply_dropped;                 // reply frames offered, and those not delivered
     OneWriter peers;                                  // gauge: requesters seen (Aeron images)
+    OneWriter resolves, not_here;                     // snap: Resolve answered; RecapRequests for another partition's instrument, refused
 };
 
 // Anything that answers SPP request frames: the gateway's control (below), a

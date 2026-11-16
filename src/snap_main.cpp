@@ -16,8 +16,10 @@
 //               [--book-levels 5000] [--ask-every-ms 1000] [--name spwsgw-snap]
 //               [--aeron-dir D] [--embedded-driver] [--seconds N] [--spin] [--quiet]
 //               [--http 127.0.0.1:9102] [--site S] [--env E] [--labels k=v,...]
+//               [--instruments F --pack P [--registry R] --topic T --topic-registry F [--partition N]]
 
 #include "aeron_io.h"
+#include "pack.h"
 #include "obs/endpoint_key.h"
 #include "obs/snap_observe.h"
 #include "publisher.h"
@@ -25,6 +27,7 @@
 #include "snap/rate_budget.h"
 #include "snap/recap_server.h"
 #include "snap/snap.h"
+#include "topic_registry.h"
 #if FEEDS_WITH_NETWORK
 #include "net.h"
 #endif
@@ -58,7 +61,8 @@ void usage() {
                "                   [--data-channel C] [--data-stream N] [--state-stream N] [--recap-stream N] [--recap-response-stream N]\n"
                "                   [--gateway-control-stream N] [--gateway-response-stream N] [--recap-term-length N] [--recap-max-pending N]\n"
                "                   [--book-levels N] [--ask-every-ms N] [--name S] [--aeron-dir D] [--embedded-driver] [--seconds N] [--spin] [--quiet]\n"
-               "                   [--http HOST:PORT] [--site S] [--env E] [--labels k=v,...]\n", stderr);
+               "                   [--http HOST:PORT] [--site S] [--env E] [--labels k=v,...]\n"
+               "                   [--instruments F --pack P [--registry R] --topic T --topic-registry F [--partition N]]\n", stderr);
 }
 
 // INTENT: tether=false: a slow or stalled snapshot service must never hold back
@@ -79,7 +83,8 @@ void print_stats(const SnapCore& core, const GatewayLink* link, const RecapServe
                  (unsigned long long)s.requests, (unsigned long long)s.bulk_requests, (unsigned long long)s.wants_coalesced, (unsigned long long)s.rejects_unknown,
                  (unsigned long long)s.sections, (unsigned long long)s.waiting, (unsigned long long)s.republish_asks, (unsigned long long)core.last_sequence());
     if (link) std::fprintf(f, " republish_sent=%llu gateway_ok=%llu", (unsigned long long)link->stats().republish_sent, (unsigned long long)link->stats().status_ok);
-    std::fprintf(f, " reply_dropped=%llu\n", (unsigned long long)server.stats().reply_dropped);
+    std::fprintf(f, " resolves=%llu not_here=%llu reply_dropped=%llu\n", (unsigned long long)server.stats().resolves,
+                 (unsigned long long)server.stats().not_here, (unsigned long long)server.stats().reply_dropped);
 }
 
 } // namespace
@@ -92,7 +97,7 @@ int main(int argc, char** argv) {
                                           "section-channel", "section-stream", "section-term-length", "section-offer-bytes", "section-rate", "section-burst", "gather-ms", "bulk-gather-ms",
                                           "gateway-control", "gateway-response", "gateway-control-stream", "gateway-response-stream",
                                           "data-channel", "data-stream", "state-stream", "book-levels", "ask-every-ms", "name", "aeron-dir", "seconds",
-                                          "http", "site", "env", "labels"};
+                                          "http", "site", "env", "labels", "instruments", "pack", "registry", "topic", "topic-registry", "partition"};
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
         if (k.rfind("--", 0) != 0) { usage(); return 2; }
@@ -132,6 +137,43 @@ int main(int argc, char** argv) {
     SnapCore core(static_cast<uint32_t>(getu("book-levels", Book::kDefaultMaxLevels)));
     core.set_gather({getu("gather-ms", 20) * 1'000'000ull, getu("bulk-gather-ms", 1000) * 1'000'000ull});
     RecapServer server(core, name, epoch);
+
+    // INTENT: the resolver (SPP Resolve) is the gateway's instruments file:
+    // every partition's instruments, so any of a topic's snaps can answer for
+    // the whole topic, and this one refuses at once an instrument it will never
+    // carry. The gateway's flags give the rest: --pack its venue (the VenueId it
+    // stamps), --topic and --topic-registry the topic id.
+    Instruments instruments;
+    if (a.count("instruments") || a.count("topic") || a.count("topic-registry") || a.count("pack")) {
+        if (!a.count("instruments") || !a.count("pack") || !a.count("topic") || !a.count("topic-registry")) {
+            std::fputs("spwsgw-snap: --instruments, --pack, --topic and --topic-registry go together\n", stderr);
+            return 2;
+        }
+        Pack pack;
+        if (!Pack::load_with_registry(a["pack"], get("registry", ""), pack, err)) { std::fprintf(stderr, "spwsgw-snap: %s\n", err.c_str()); return 2; }
+        if (!instruments.load_file(a["instruments"], false, err)) { std::fprintf(stderr, "spwsgw-snap: %s\n", err.c_str()); return 2; }
+        TopicRegistry topics;
+        if (!topics.load_file(a["topic-registry"], err)) { std::fprintf(stderr, "spwsgw-snap: %s\n", err.c_str()); return 2; }
+        const TopicEntry* te = topics.find(a["topic"]);
+        if (!te) { std::fprintf(stderr, "spwsgw-snap: topic %s is not in %s\n", a["topic"].c_str(), a["topic-registry"].c_str()); return 2; }
+        const uint64_t part = getu("partition", 1);
+        if (part < 1 || part > 65535) { std::fputs("spwsgw-snap: --partition must be 1..65535\n", stderr); return 2; }
+        RecapServer::Directory d;
+        d.list = &instruments;
+        d.topic_id = te->id;
+        d.partition = static_cast<uint16_t>(part);
+        d.venue = pack.venue_id;
+        for (const Instrument& in : instruments.all()) {
+            d.partitions = in.partition > d.partitions ? in.partition : d.partitions;
+            if (in.partition == d.partition) core.expect(in.id, d.venue);
+        }
+        server.set_directory(d);
+        if (!quiet) std::fprintf(stderr, "spwsgw-snap: resolver for topic %s (id %u): %zu instruments on %u partitions; this is partition %u\n",
+                                 te->name.c_str(), te->id, instruments.all().size(), d.partitions, d.partition);
+    } else if (a.count("partition") || a.count("registry")) {
+        std::fputs("spwsgw-snap: --partition and --registry go with --instruments\n", stderr);
+        return 2;
+    }
 
     // INTENT: the section stream is shared by every agent on the partition.
     // A section (a whole book: about 100 bytes a level) goes out in offers of

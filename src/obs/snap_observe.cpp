@@ -28,6 +28,8 @@ void each_counter(const SnapStats& s, F&& f) {
 template <typename F>
 void each_recap(const ControlStats& c, F&& f) {
     f("frames", "SPP recap request frames received", c.frames);
+    f("resolves", "SPP Resolve requests answered from the instruments file (--instruments)", c.resolves);
+    f("not_here", "RecapRequests refused at once: the instruments file puts the instrument on another partition, or does not list it", c.not_here);
     f("malformed", "SPP recap frames or messages that did not parse", c.malformed);
     f("hellos", "SPP Hello messages received", c.hellos);
     f("unsupported", "SPP messages answered Status{Unsupported}", c.unsupported);
